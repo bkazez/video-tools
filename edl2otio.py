@@ -138,7 +138,11 @@ def convert_samplitude_to_otio(infile, take_def_edl, outfile, track_number, fps,
                     )
                     video_clip = otio.schema.Clip(
                         name=name,
-                        media_reference=media_reference
+                        media_reference=media_reference,
+                        source_range=otio.opentime.range_from_start_end_time(
+                            opentime_from_samples(source_in, sample_rate),
+                            opentime_from_samples(source_out, sample_rate)
+                        )
                     )
                     video_track.append(video_clip)
 
