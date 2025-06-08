@@ -183,7 +183,7 @@ def main():
     # Derive the output filename from the input filename and ensure it's in the same directory
     infile_dir = os.path.dirname(args.infile)
     infile_basename = os.path.basename(args.infile)
-    outfile = os.path.join(infile_dir, os.path.splitext(infile_basename)[0] + ".otio")
+    outfile = os.path.join(infile_dir, os.path.splitext(infile_basename)[0] + "-out.otio")
 
     print(f"Writing to {outfile}")
 
