@@ -145,6 +145,13 @@ def main():
     ms = resolve.GetMediaStorage()
     imported = {}                     # basename -> MediaPoolItem
 
+    for name in spec.get("delete_timelines", []):
+        for i in range(project.GetTimelineCount(), 0, -1):
+            tl = project.GetTimelineByIndex(i)
+            if tl and tl.GetName() == name:
+                mp.DeleteTimelines([tl])
+                print(f"  deleted timeline {name!r}")
+
     for b, files in plan:
         if not files:
             continue
