@@ -38,11 +38,25 @@ Spec:
     timelines:
       - name: "Fauré — candidate A"
         bin: "04 Timelines"
-        audio: "Fauré-001.wav"      # laid at the head of the timeline
+        replace: true               # delete an existing timeline of this name
+        audio:
+          file: "Fauré-001.wav"
+          at: 4.0                   # timeline seconds; omit to lay it at the head
         clips:
-          - file: C0485.MP4
-            start: 10.828           # seconds into the clip, REAL time
-            duration: 83.131
+          - {file: DJI_0690.MP4, start: 195.0,  duration: 4.0,    at: 0.0}
+          - {file: C0485.MP4,    start: 10.828, duration: 83.132, at: 4.0}
+          - {file: DJI_0690.MP4, start: 250.0,  duration: 5.0,    at: 87.132}
+
+    deliver:                        # optional; renders once everything is built
+      dir: "~/Desktop/Renders/Faure audition"
+      format: mp4
+      codec: H264
+      width: 1920
+      height: 1080
+      timelines: ["Fauré — candidate A"]
+
+`start` is always REAL seconds into the clip; `at` is where it lands on the
+timeline. Omit `at` and clips are laid end to end in the order written.
 """
 import argparse, glob, os, sys
 import yaml
@@ -155,23 +169,35 @@ def main():
     for t in spec.get("timelines", []):
         tl_bin = t.get("bin", "Timelines")
         mp.SetCurrentFolder(find_bin(mp, tl_bin))
+        if t.get("replace"):
+            for i in range(1, project.GetTimelineCount() + 1):
+                old = project.GetTimelineByIndex(i)
+                if old and old.GetName() == t["name"]:
+                    mp.DeleteTimelines([old])
+                    print(f"\nreplacing existing timeline {t['name']!r}")
+                    break
         tl = mp.CreateEmptyTimeline(t["name"])
         if not tl:
-            print(f"\n!! could not create timeline {t['name']!r} (name already used?)")
+            print(f"\n!! could not create timeline {t['name']!r} "
+                  f"(name already used -- set 'replace: true' to rebuild it)")
             continue
         project.SetCurrentTimeline(tl)
         fps = float(project.GetSetting("timelineFrameRate"))
         start_frame = int(tl.GetStartFrame())
         print(f"\ntimeline {t['name']!r} at {fps:g} fps, starts at frame {start_frame}")
 
-        if t.get("audio"):
-            a = imported.get(os.path.basename(t["audio"]))
+        audio = t.get("audio")
+        if isinstance(audio, str):
+            audio = {"file": audio}
+        if audio:
+            a = imported.get(os.path.basename(audio["file"]))
             if not a:
-                print(f"  !! audio {t['audio']!r} is not in any bin")
+                print(f"  !! audio {audio['file']!r} is not in any bin")
             else:
+                at = start_frame + int(round(float(audio.get("at", 0)) * fps))
                 mp.AppendToTimeline([{"mediaPoolItem": a, "mediaType": 2,
-                                      "trackIndex": 1, "recordFrame": start_frame}])
-                print(f"  audio  {a.GetName()}")
+                                      "trackIndex": 1, "recordFrame": at}])
+                print(f"  audio  {a.GetName()} at timeline frame {at}")
 
         record = start_frame
         for c in t.get("clips", []):
@@ -180,11 +206,14 @@ def main():
                 print(f"  !! {c['file']!r} is not in any bin")
                 continue
             # startFrame/endFrame count in the CLIP's own frames, which after an
-            # FPS override are real-time frames at the capture rate.
+            # FPS override are real-time frames at the capture rate. recordFrame
+            # counts in TIMELINE frames. Mixing the two is the usual bug here.
             cfps = float(item.GetClipProperty("FPS"))
             sf = int(round(float(c.get("start", 0)) * cfps))
             dur = float(c.get("duration", 0))
             ef = sf + int(round(dur * cfps)) - 1
+            if "at" in c:
+                record = start_frame + round(float(c["at"]) * fps)
             info = {"mediaPoolItem": item, "mediaType": 1, "trackIndex": 1,
                     "startFrame": sf, "endFrame": ef,
                     "recordFrame": int(round(record))}
@@ -201,6 +230,44 @@ def main():
 
     pm.SaveProject()
     print("\nsaved.")
+
+    d = spec.get("deliver")
+    if not d:
+        return
+    out = os.path.expanduser(d.get("dir", "~/Desktop"))
+    os.makedirs(out, exist_ok=True)
+    project.DeleteAllRenderJobs()
+    wanted = d.get("timelines") or [t["name"] for t in spec.get("timelines", [])]
+    queued = 0
+    for i in range(1, project.GetTimelineCount() + 1):
+        tl = project.GetTimelineByIndex(i)
+        if tl.GetName() not in wanted:
+            continue
+        project.SetCurrentTimeline(tl)
+        project.SetCurrentRenderFormatAndCodec(d.get("format", "mp4"),
+                                               d.get("codec", "H264"))
+        settings = {"TargetDir": out, "CustomName": tl.GetName(),
+                    "SelectAllFrames": True}
+        if d.get("width"):
+            settings["FormatWidth"] = int(d["width"])
+            settings["FormatHeight"] = int(d["height"])
+        project.SetRenderSettings(settings)
+        if project.AddRenderJob():
+            queued += 1
+            print(f"queued  {tl.GetName()}")
+    if not queued:
+        print("nothing queued -- none of the named timelines exist")
+        return
+    print(f"\nrendering {queued} timeline(s) to {out} ...")
+    project.StartRendering()
+    import time
+    while project.IsRenderingInProgress():
+        time.sleep(5)
+    for j in project.GetRenderJobList():
+        st = project.GetRenderJobStatus(j["JobId"])
+        print(f"  {j.get('OutputFilename', '?')}: {st.get('JobStatus')} "
+              f"{st.get('CompletionPercentage', '')}%")
+    pm.SaveProject()
 
 
 if __name__ == "__main__":
