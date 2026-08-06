@@ -1,0 +1,127 @@
+#!/usr/bin/env python3
+"""What a Sony camera actually recorded, read out of the clip itself.
+
+Copying clips off the card as bare .MP4 leaves the CLIP/*.XML sidecars behind,
+and that XML is where most tools expect to find the camera's own account of the
+shot. The real-time metadata track inside the file carries it too, so nothing is
+really lost.
+
+Three things this answers that ffprobe cannot:
+
+  * **Slow motion.** In S&Q mode the camera captures at one rate and writes the
+    file at another, so a clip reports a duration that is a multiple of its real
+    length and every sync calculation built on that duration is wrong. The
+    capture rate is stated outright in the metadata; the ratio against the
+    container rate is the retime factor.
+
+  * **Capture gamma.** S-Log3 footage is untagged in the container
+    (color_transfer=unknown), so a grading app has no way to know. The embedded
+    LUT name gives it away, and the luma statistics confirm it.
+
+  * **Wall clock.** The camera's own clock at the first frame, which is what
+    lets footage be lined up against a separate audio recorder.
+
+Usage:
+    sony-clip-info CLIP.MP4 [CLIP2.MP4 ...]
+    sony-clip-info /path/to/Video/            # every clip in a folder
+    sony-clip-info --json Video/              # machine-readable
+    sony-clip-info --deep Video/C0490.MP4     # also check audio and picture
+    sony-clip-info --verify Video/C0490.MP4   # re-read the clock at the last
+                                              # frame to confirm the factor
+"""
+import argparse, glob, json, os, sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
+from sonyrtmd import describe
+
+
+def fmt(rec):
+    L = []
+    a = L.append
+    a(f"{rec['file']}")
+    a(f"  {rec.get('width')}x{rec.get('height')} {rec.get('codec')} "
+      f"{rec.get('pix_fmt')} range={rec.get('color_range')}")
+    if rec.get("model_serial"):
+        a(f"  camera            {rec['model_serial']}")
+    if rec.get("clock"):
+        a(f"  started           {rec['clock']}  (camera clock)")
+    if rec.get("timecode"):
+        a(f"  timecode          {rec['timecode']}")
+    cf = rec.get("container_fps") or 0
+    if rec.get("capture_fps"):
+        a(f"  frame rate        captured {rec['capture_fps']:g} fps, "
+          f"written {cf:g} fps")
+    if rec.get("is_slowmo"):
+        a(f"  ** SLOW MOTION    {rec['slowmo_factor']:g}x -- "
+          f"file runs {rec['duration']:.2f}s but is "
+          f"{rec['real_duration']:.2f}s of real time")
+        a(f"                    retime to {rec['slowmo_factor']*100:g}% for real speed")
+    elif rec.get("slowmo_factor"):
+        a(f"  speed             real time")
+    if rec.get("shutter"):
+        line = f"  shutter           {rec['shutter']}"
+        if rec.get("shutter_angle_capture"):
+            line += f"  ({rec['shutter_angle_capture']:g}° at the capture rate)"
+        a(line)
+    if rec.get("iso"):
+        line = f"  ISO               {rec['iso']}"
+        if rec.get("master_gain_db") is not None:
+            line += f"  (master gain {rec['master_gain_db']:+g} dB)"
+        if rec.get("iso_gain_agree") is False:
+            line += "  !! gain and ISO disagree -- tag mapping may be wrong"
+        a(line)
+    if rec.get("white_balance_k"):
+        a(f"  white balance     {rec['white_balance_k']} K")
+    if rec.get("embedded_lut"):
+        a(f"  embedded LUT      {', '.join(rec['embedded_lut'])}")
+        if any("SL3" in x or "SLog3" in x for x in rec["embedded_lut"]):
+            a( "                    -> shot S-Log3 / S-Gamut3.Cine")
+    if rec.get("audio_silent") is True:
+        a( "  audio             SILENT (all zero) -- cannot be synced by audio")
+    elif rec.get("audio_silent") is False:
+        a(f"  audio             {rec.get('audio_codec')}, has signal")
+    if rec.get("looks_like_log"):
+        y = rec["luma"]
+        a(f"  picture           log-like (YMAX {y['YMAX']:.0f}, SATAVG {y['SATAVG']:.1f})")
+    if rec.get("measured_factor"):
+        a(f"  verified          clock says {rec['measured_factor']:g}x "
+          f"({rec['clock']} -> {rec['clock_end']})")
+    if rec.get("parse_ok") is False:
+        a(f"  !! metadata parse looks wrong (imager aspect {rec['imager_aspect']})")
+    if rec.get("note"):
+        a(f"  {rec['note']}")
+    return "\n".join(L)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("paths", nargs="+", help="clips, or folders of clips")
+    ap.add_argument("--json", action="store_true", help="machine-readable output")
+    ap.add_argument("--verify", action="store_true",
+                    help="re-read the clock at the last frame to confirm the "
+                         "slow-motion factor (reads the whole file)")
+    ap.add_argument("--deep", action="store_true",
+                    help="also check for silent audio and measure the picture")
+    args = ap.parse_args()
+
+    files = []
+    for p in args.paths:
+        if os.path.isdir(p):
+            for ext in ("MP4", "mp4", "MXF", "mxf"):
+                files += sorted(glob.glob(os.path.join(p, f"*.{ext}")))
+        else:
+            files.append(p)
+    if not files:
+        sys.exit("no clips found")
+
+    recs = [describe(f, verify=args.verify, deep=args.deep) for f in files]
+    if args.json:
+        print(json.dumps(recs, indent=2))
+    else:
+        for r in recs:
+            print(fmt(r)); print()
+
+
+if __name__ == "__main__":
+    main()

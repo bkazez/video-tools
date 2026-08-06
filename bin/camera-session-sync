@@ -1,0 +1,367 @@
+#!/usr/bin/env python3
+"""Line a camera up with a separate audio recorder, using each device's own clock.
+
+The usual way to sync a camera to a sound recorder is to correlate the camera's
+scratch audio against the recording. That fails whenever the camera has no
+usable audio -- a Sony in S&Q mode records none at all, a camera with a dead mic
+input records silence, and a locked-off camera in a loud room records mush.
+
+What both devices do have is a clock. Neither is right, but the difference
+between them is constant over an evening, and it can be recovered without any
+audio at all: an operator starts the camera at the top of a take, so camera
+roll-starts pile up near recorder take-starts. Every (roll-start, take-start)
+pair proposes an offset; the true offset is the one many pairs agree on. That is
+a one-dimensional Hough vote, and it is robust to the camera rolling through
+takes it was not started for, and to takes nobody filmed.
+
+Accuracy is bounded by the coarser clock -- Sony's acquisition clock ticks in
+whole seconds -- so this gets you to about a second. That is enough to find the
+right clip and the right minute, and not enough for lip sync; close the last
+second by eye, or by correlating picture motion against audio onsets.
+
+Usage:
+    camera-session-sync VIDEO_DIR AUDIO_DIR
+    camera-session-sync Video/ Media/ --project "Session.RPP"
+    camera-session-sync Video/ Media/ --project "Session.RPP" --region "Fauré"
+    camera-session-sync Video/ Media/ --offset 195      # skip solving
+"""
+import argparse, datetime, glob, json, os, re, subprocess, sys
+from collections import defaultdict
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(HERE, "..", "lib"))
+from sonyrtmd import describe
+
+
+def run(cmd):
+    return subprocess.run(cmd, capture_output=True, text=True).stdout
+
+
+_probe_cache = {}
+
+
+def ffprobe_json(path, *extra):
+    """Cached: every region maps through the item under it, and a session has
+    far more regions than source files."""
+    key = (path, extra)
+    if key not in _probe_cache:
+        _probe_cache[key] = json.loads(
+            run(["ffprobe", "-v", "error", "-show_format", "-show_streams",
+                 "-of", "json", *extra, path]) or "{}")
+    return _probe_cache[key]
+
+
+# ---------------------------------------------------------------- camera side
+
+def camera_clips(d):
+    """Start wall clock and real duration for every clip in a folder.
+
+    Real duration, not container duration: slow-motion clips report a length
+    that is a multiple of the time they actually occupy, and using it would
+    stretch every clip past the take that follows.
+    """
+    out = []
+    files = []
+    for ext in ("MP4", "mp4", "MXF", "mxf"):
+        files += glob.glob(os.path.join(d, f"*.{ext}"))
+    for f in sorted(set(files)):
+        rec = describe(f)
+        if not rec.get("clock"):
+            continue
+        start = datetime.datetime.strptime(rec["clock"], "%Y-%m-%d %H:%M:%S")
+        real = rec.get("real_duration") or rec.get("duration") or 0
+        out.append({"file": os.path.basename(f), "path": f, "start": start,
+                    "real_duration": real, "container_duration": rec.get("duration"),
+                    "slowmo": rec.get("slowmo_factor", 1.0)})
+    return out
+
+
+# ------------------------------------------------------------- recorder side
+
+def bwf_datetime(tags):
+    """Wall clock a broadcast-WAV says it started at.
+
+    Two spellings in the wild. A true BWF bext chunk keeps the date and the time
+    in separate fields and writes the time with dashes -- ffprobe surfaces that
+    as date="2026-04-07", creation_time="21-15-38", and reading creation_time as
+    a full timestamp finds nothing. Other writers put an ISO timestamp in
+    creation_time and no date at all.
+    """
+    tags = {k.lower(): v for k, v in (tags or {}).items()}
+    ct, date = tags.get("creation_time", ""), tags.get("date", "")
+    if ct and ("T" in ct or (" " in ct and "-" in ct.split(" ")[0])):
+        s = ct.replace("T", " ").replace("Z", "").split(".")[0]
+        try:
+            return datetime.datetime.strptime(s, "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            pass
+    if date and ct:
+        s = f"{date} {ct.replace('-', ':')}"
+        try:
+            return datetime.datetime.strptime(s, "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            pass
+    return None
+
+
+def bwf_takes(d):
+    """Distinct recorder takes: BWF start time plus duration.
+
+    A multi-mic session writes one file per channel per take, all with identical
+    timing, so identical (start, duration) pairs are collapsed to one take.
+    """
+    seen, takes = {}, []
+    files = []
+    for ext in ("wav", "WAV", "flac"):
+        files += glob.glob(os.path.join(d, f"*.{ext}"))
+    for f in sorted(set(files)):
+        d_ = ffprobe_json(f)
+        start = bwf_datetime(d_.get("format", {}).get("tags"))
+        if not start:
+            continue
+        dur = float(d_.get("format", {}).get("duration", 0))
+        key = (start, round(dur, 2))
+        if key in seen:
+            seen[key]["files"].append(os.path.basename(f))
+            continue
+        t = {"start": start, "duration": dur, "files": [os.path.basename(f)],
+             "name": os.path.basename(f)}
+        seen[key] = t
+        takes.append(t)
+    takes.sort(key=lambda t: t["start"])
+    return takes
+
+
+# ------------------------------------------------------------------- solving
+
+def solve_offset(clips, anchors, tol=3.0, search=(-7200, 7200)):
+    """Offset in seconds to ADD to a camera time to get a recorder time.
+
+    Every (roll-start, anchor) pair votes for the offset that would make them
+    coincide; the winning cluster is the answer. Ties break toward the smaller
+    absolute offset, since two clocks set by the same person on the same day are
+    more likely a few minutes apart than a few hours.
+
+    Anchors are the moments an operator would have rolled for. Recorder file
+    starts are the obvious ones, but they are not enough on their own: a session
+    that leaves the recorder running through an hour of takes offers one file
+    start for a dozen performances, and most clips then vote for nothing. Region
+    starts -- the tops of the takes as marked in the edit -- are the anchors that
+    actually correspond to a camera operator pressing record.
+    """
+    votes = []
+    for c in clips:
+        for a in anchors:
+            d = (a["start"] - c["start"]).total_seconds()
+            if search[0] <= d <= search[1]:
+                votes.append(d)
+    if not votes:
+        return None, 0, []
+    votes.sort()
+    best = (0, None, [])
+    for v in votes:
+        members = [x for x in votes if abs(x - v) <= tol]
+        if len(members) > best[0] or (len(members) == best[0] and best[1] is not None
+                                      and abs(v) < abs(best[1])):
+            best = (len(members), sum(members) / len(members), members)
+    return best[1], best[0], best[2]
+
+
+def residuals(clips, anchors, offset):
+    """How far each camera roll-start lands from the nearest anchor."""
+    out = []
+    for c in clips:
+        mapped = c["start"] + datetime.timedelta(seconds=offset)
+        near = min(anchors, key=lambda a: abs((a["start"] - mapped).total_seconds()))
+        out.append((c["file"], mapped, near["name"],
+                    (mapped - near["start"]).total_seconds()))
+    return out
+
+
+# ------------------------------------------------------------------ RPP side
+
+ITEM_RE = re.compile(r"<ITEM\b(.*?)\n\s*>", re.S)
+
+
+def parse_rpp(path):
+    """Regions, and the items that let a project time become a wall clock."""
+    text = open(path, encoding="utf-8", errors="replace").read()
+
+    regions, open_marks = [], {}
+    for m in re.finditer(r"^\s*MARKER (\d+) ([\d.]+) (.*)$", text, re.M):
+        rid, pos, rest = m.group(1), float(m.group(2)), m.group(3)
+        name = rest[1:rest.index('"', 1)] if rest.startswith('"') else rest.split(" ")[0]
+        fields = rest.split(" ")
+        is_region_start = (name != "" and len(fields) > 1)
+        if rid in open_marks:
+            s = open_marks.pop(rid)
+            regions.append({"name": s[1], "start": s[0], "end": pos})
+        elif is_region_start:
+            open_marks[rid] = (pos, name)
+
+    # Items grouped by track. They must NOT be pooled across tracks: a session
+    # often carries a second recorder (a room pair on its own box) whose files
+    # are stamped from that device's clock, and it is routinely hours off. Pooled,
+    # a region lands on whichever item happens to sort first and silently reports
+    # a wall clock from the wrong machine.
+    tracks = []
+    for tblock in re.split(r"\n  <TRACK\b", text)[1:]:
+        m = re.search(r"^\s*NAME (.+)$", tblock, re.M)
+        name = (m.group(1).strip().strip('"') if m else "")
+        items = []
+        for block in re.findall(r"<ITEM\n(.*?)\n      >", tblock, re.S):
+            g = lambda k: (float(mm.group(1))
+                           if (mm := re.search(rf"^\s*{k} ([\d.eE+-]+)", block, re.M)) else None)
+            f = re.search(r'FILE "([^"]+)"', block)
+            if f and g("POSITION") is not None:
+                items.append({"position": g("POSITION"), "length": g("LENGTH") or 0,
+                              "soffs": g("SOFFS") or 0.0, "file": f.group(1)})
+        items.sort(key=lambda i: i["position"])
+        if items:
+            tracks.append({"name": name, "items": items})
+    return regions, tracks
+
+
+def project_to_wall(t, items, media_dir):
+    """Project time -> recorder wall clock, via whichever item covers it.
+
+    Project time is not linear with wall clock: the gaps between takes on a
+    timeline are whatever the editor left, not the real minutes between
+    recordings. Every conversion has to go through the item sitting under it.
+    """
+    for it in items:
+        # Epsilon because a region edge is routinely set exactly to an item edge,
+        # and the two are stored with different rounding.
+        if it["position"] - 1e-6 <= t <= it["position"] + it["length"] + 1e-6:
+            src = os.path.join(media_dir, os.path.basename(it["file"]))
+            if not os.path.exists(src):
+                continue
+            base = bwf_datetime(ffprobe_json(src).get("format", {}).get("tags"))
+            if not base:
+                continue
+            into = t - it["position"] + it["soffs"]
+            return base + datetime.timedelta(seconds=into), os.path.basename(it["file"])
+    return None, None
+
+
+# -------------------------------------------------------------------- output
+
+def hms(dt):
+    return dt.strftime("%H:%M:%S") + f".{dt.microsecond//1000:03d}"
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("video_dir")
+    ap.add_argument("audio_dir")
+    ap.add_argument("--project", help="a Reaper .RPP, to map its regions too")
+    ap.add_argument("--track", help="track whose items carry the reference timestamps "
+                                    "(default: the first track holding audio). Point this "
+                                    "at a main mic, never at a second recorder's track")
+    ap.add_argument("--region", help="report where this region falls in the footage")
+    ap.add_argument("--offset", type=float, help="known offset in seconds; skip solving")
+    ap.add_argument("--tolerance", type=float, default=3.0,
+                    help="how close two starts must be to vote together (default 3 s)")
+    ap.add_argument("--json", action="store_true")
+    args = ap.parse_args()
+
+    clips = camera_clips(args.video_dir)
+    takes = bwf_takes(args.audio_dir)
+    if not clips:
+        sys.exit("no camera clips with a readable clock in " + args.video_dir)
+    if not takes:
+        sys.exit("no BWF-stamped audio in " + args.audio_dir)
+
+    regions, items, region_walls = [], [], {}
+    if args.project:
+        regions, tracks = parse_rpp(args.project)
+        if not tracks:
+            sys.exit("no tracks with items in " + args.project)
+        chosen = next((t for t in tracks if t["name"] == args.track), None) if args.track \
+            else tracks[0]
+        if chosen is None:
+            sys.exit(f"no track named {args.track!r}; have: "
+                     + ", ".join(t["name"] for t in tracks))
+        items = chosen["items"]
+        print(f"reading times from track {chosen['name']!r} "
+              f"({len(items)} items)")
+        for r in regions:
+            w0, _ = project_to_wall(r["start"], items, args.audio_dir)
+            w1, _ = project_to_wall(r["end"], items, args.audio_dir)
+            if w0:
+                region_walls[r["name"], r["start"]] = (w0, w1)
+
+    anchors = [{"start": t["start"], "name": t["name"], "kind": "file"} for t in takes]
+    anchors += [{"start": w0, "name": name, "kind": "region"}
+                for (name, _), (w0, _) in region_walls.items()]
+
+    print(f"{len(clips)} camera clips, {len(takes)} recorder takes, "
+          f"{len(region_walls)} placed regions")
+    if not args.project:
+        print("  (no --project: only recorder file starts can anchor the solve, which is\n"
+              "   weak when one long file holds many takes)")
+    print()
+
+    if args.offset is not None:
+        offset, votes, members = args.offset, 0, []
+        print(f"clock offset  recorder = camera + {offset:.1f} s (given)\n")
+    else:
+        offset, votes, members = solve_offset(clips, anchors, tol=args.tolerance)
+        if offset is None:
+            sys.exit("could not find any offset -- are these from the same day?")
+        spread = max(members) - min(members) if members else 0
+        print(f"clock offset  recorder = camera + {offset:.1f} s "
+              f"(camera reads {datetime.timedelta(seconds=round(abs(offset)))}"
+              f"{' behind' if offset > 0 else ' ahead'})")
+        print(f"  {votes} roll-start/anchor pairs agree, spread {spread:.1f} s")
+        print(f"  resolution is limited by the camera clock, which ticks in whole "
+              f"seconds\n")
+
+    print("camera clip        maps to           nearest anchor              delta")
+    print("-" * 78)
+    for f, mapped, tname, delta in residuals(clips, anchors, offset):
+        flag = "  <-- rolled for this" if abs(delta) <= args.tolerance else ""
+        print(f"{f:<18} {hms(mapped)}   {tname[:26]:<26} {delta:+7.1f}s{flag}")
+
+    if not args.project:
+        return
+
+    media_dir = args.audio_dir
+    print(f"\n{len(regions)} regions in {os.path.basename(args.project)}")
+
+    wanted = [r for r in regions if not args.region or r["name"] == args.region]
+    if args.region and not wanted:
+        sys.exit(f"no region named {args.region!r}; have: "
+                 + ", ".join(sorted({r['name'] for r in regions})[:20]))
+
+    print("\nregion                     recorder wall clock         camera clip and in-point")
+    print("-" * 96)
+    for r in wanted:
+        w0, src = project_to_wall(r["start"], items, media_dir)
+        w1, _ = project_to_wall(r["end"], items, media_dir)
+        if not w0:
+            print(f"{r['name'][:24]:<24}   (no item under it)")
+            continue
+        cam0 = w0 - datetime.timedelta(seconds=offset)
+        hit = None
+        for c in clips:
+            if c["start"] <= cam0 <= c["start"] + datetime.timedelta(seconds=c["real_duration"]):
+                hit = c
+                break
+        line = f"{r['name'][:24]:<24}   {hms(w0)} - {hms(w1) if w1 else '?':<12}"
+        if hit:
+            into = (cam0 - hit["start"]).total_seconds()
+            covers = (hit["start"] + datetime.timedelta(seconds=hit["real_duration"])) >= (w1 - datetime.timedelta(seconds=offset)) if w1 else False
+            line += (f"  {hit['file']} @ {into:.3f}s real")
+            if hit["slowmo"] and abs(hit["slowmo"] - 1) > 0.01:
+                line += f" (= {into*hit['slowmo']:.3f}s in the {hit['slowmo']:g}x file)"
+            if not covers:
+                line += "  ** clip ends before the region does"
+        else:
+            line += "  no clip rolling"
+        print(line)
+
+
+if __name__ == "__main__":
+    main()

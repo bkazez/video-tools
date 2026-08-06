@@ -1,11 +1,14 @@
 -- Reaper Lua Script: Export Region to OpenTimelineIO
--- Usage: Set region_name variable and run script
+-- Usage: Set region_name variable and run script:
+-- /Applications/REAPER.app/Contents/MacOS/REAPER "project.rpp" "region_to_otio.lua" -close:nosave:exit
 
-local region_name = "E1" -- Change this to your target region name
+local region_name = "E2" -- Change this to your target region name
 local track_index = 0 -- First track (0-indexed)
-local fps = 29.97002997002997 -- Default frame rate
--- local fps = 25 -- PAL frame rate
+-- local fps = 29.97002997002997 -- 30fps
+local fps = 25 -- 25fps (PAL)
+-- local fps = 23.976 -- 24fps
 local render_audio = true -- Set to true to also render audio mix of the region
+
 
 function msg(text)
     reaper.ShowConsoleMsg(tostring(text) .. "\n")
@@ -280,10 +283,9 @@ function find_track_with_items(region_start, region_end)
     for i = 0, num_tracks - 1 do
         local track = reaper.GetTrack(0, i)
         local retval, track_name = reaper.GetSetMediaTrackInfo_String(track, "P_NAME", "", false)
-        local is_folder = is_folder_track(track)
         local items = get_media_items_in_region(track, region_start, region_end)
         msg("Track " .. i .. " (" .. track_name .. "): " .. #items .. " items" .. (is_folder and " [FOLDER]" or ""))
-        if #items > 0 and not is_folder then
+        if #items > 0 then
             return track, i, items
         end
     end

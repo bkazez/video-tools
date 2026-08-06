@@ -1,0 +1,184 @@
+#!/usr/bin/env python3
+"""Align silent footage to an audio recording by correlating movement against sound.
+
+A camera clock gets you to about a second. Lip sync needs a frame. This closes
+the gap without any camera audio at all, by using the only other thing the
+picture and the sound have in common: when something happens.
+
+Players move when they play. Frame-to-frame pixel change rises on an attack, a
+bow change, a breath, a hand leaving the keys, and falls in a held note -- so the
+derivative of picture motion and the derivative of audio loudness carry the same
+rhythm even though neither is a copy of the other. Correlating them over a narrow
+window around a known-approximate offset finds the frame.
+
+This is a refinement, not a search. Give it a starting guess -- from
+camera-session-sync, or from a clapperboard, or from eyeballing -- and a window
+of a few seconds. Run over a whole clip it will happily return a confident wrong
+answer, because a performance is full of moments that look like other moments.
+
+Always check the reported confidence, and always confirm the result by eye on a
+consonant or a visible attack before trusting it.
+
+Usage:
+    motion-sync CLIP.MP4 AUDIO.wav --at 6.6
+    motion-sync C0490.MP4 "Takes/Fauré T22.wav" --at 0.85 --window 4
+    motion-sync CLIP.MP4 AUDIO.wav --at 6.6 --capture-fps 50   # slow-motion clip
+"""
+import argparse, json, os, subprocess, sys
+import numpy as np
+
+FPS = 25.0          # analysis rate for both signals
+W, H = 128, 72      # motion is a gross measure; small frames are plenty and fast
+
+
+def run(cmd):
+    return subprocess.run(cmd, capture_output=True)
+
+
+def probe(path):
+    d = json.loads(subprocess.run(
+        ["ffprobe", "-v", "error", "-show_streams", "-show_format", "-of", "json", path],
+        capture_output=True, text=True).stdout or "{}")
+    v = next((s for s in d.get("streams", []) if s["codec_type"] == "video"), None)
+    num, den = (int(x) for x in v["r_frame_rate"].split("/")) if v else (0, 1)
+    return {"duration": float(d["format"]["duration"]),
+            "container_fps": num / den if den else 0}
+
+
+def motion_energy(path, start_file_s, dur_file_s, container_fps, capture_fps):
+    """Per-frame picture change, on a real-time axis at FPS.
+
+    The clip is decoded at its own frame positions; real time is frame index
+    divided by the CAPTURE rate, which is what makes this correct for slow
+    motion. A 2x clip decoded as if it ran at its container rate would stretch
+    the motion signal to twice its true length and never correlate.
+    """
+    rate = capture_fps or container_fps
+    # Decode at a fixed rate along the *file* axis, then rescale to real time.
+    file_fps = FPS * (rate / container_fps) if container_fps else FPS
+    p = run(["ffmpeg", "-v", "error", "-ss", str(start_file_s), "-t", str(dur_file_s),
+             "-i", path, "-vf", f"fps={file_fps},scale={W}:{H},format=gray",
+             "-f", "rawvideo", "-"])
+    buf = np.frombuffer(p.stdout, dtype=np.uint8)
+    n = len(buf) // (W * H)
+    if n < 4:
+        return np.zeros(0)
+    frames = buf[:n * W * H].reshape(n, H * W).astype(np.float32)
+    # Mean absolute difference between consecutive frames.
+    d = np.abs(np.diff(frames, axis=0)).mean(1)
+    return d.astype(np.float64)
+
+
+def audio_onset(path, start_s, dur_s):
+    """Loudness envelope of the audio on the same axis at FPS."""
+    sr = 8000
+    raw = run(["ffmpeg", "-v", "error", "-ss", str(start_s), "-t", str(dur_s), "-i", path,
+               "-map", "0:a:0", "-ac", "1", "-ar", str(sr), "-f", "f32le", "-"]).stdout
+    x = np.frombuffer(raw, dtype=np.float32).astype(np.float64)
+    hop = int(sr / FPS)
+    n = (len(x) // hop) * hop
+    if n == 0:
+        return np.zeros(0)
+    e = np.sqrt((x[:n].reshape(-1, hop) ** 2).mean(1) + 1e-12)
+    return np.log(e + 1e-6)
+
+
+def flux(a):
+    """Half-wave-rectified derivative, z-scored.
+
+    Both signals are differentiated because their absolute levels have nothing to
+    do with each other -- a loud passage is not a bright one. What matches is the
+    moment of change. Rectifying keeps onsets and drops decays, which is what
+    makes a keyboard attack and a loudness step look alike.
+    """
+    d = np.diff(a, prepend=a[0])
+    d = np.maximum(d, 0)
+    if d.std() < 1e-12:
+        return d
+    return (d - d.mean()) / d.std()
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("clip")
+    ap.add_argument("audio")
+    ap.add_argument("--at", type=float, required=True,
+                    help="best guess: real-time seconds into the clip where the "
+                         "audio's first sample belongs")
+    ap.add_argument("--window", type=float, default=3.0,
+                    help="search this many seconds either side of --at (default 3)")
+    ap.add_argument("--length", type=float, default=90.0,
+                    help="how much material to correlate (default 90 s)")
+    ap.add_argument("--capture-fps", type=float,
+                    help="real capture rate, for slow-motion clips (sony-clip-info "
+                         "reports it). Default: the container rate")
+    args = ap.parse_args()
+
+    info = probe(args.clip)
+    cfps = info["container_fps"]
+    cap = args.capture_fps or cfps
+    factor = cap / cfps if cfps else 1.0
+    if abs(factor - 1) > 0.01:
+        print(f"clip is {factor:g}x slow motion "
+              f"({cfps:g} fps container, {cap:g} fps captured)")
+
+    # Work in real time; convert to file positions only when calling ffmpeg.
+    real_start = max(0.0, args.at - args.window)
+    real_len = args.length + 2 * args.window
+    file_start = real_start * factor
+    file_len = real_len * factor
+    if file_start + file_len > info["duration"]:
+        file_len = info["duration"] - file_start
+        real_len = file_len / factor
+        print(f"clip is short; correlating {real_len:.1f}s of real time")
+
+    print(f"reading picture from {real_start:.3f}s real ({file_start:.3f}s in the file) "
+          f"for {real_len:.1f}s ...")
+    m = motion_energy(args.clip, file_start, file_len, cfps, cap)
+    print(f"reading audio ...")
+    a = audio_onset(args.audio, 0, args.length)
+    if len(m) < 10 or len(a) < 10:
+        sys.exit("not enough material to correlate")
+
+    mf, af = flux(m), flux(a)
+    lags = int(args.window * FPS)
+    n = min(len(af), len(mf) - 2 * lags)
+    if n < 10:
+        sys.exit("search window is wider than the material available")
+    af = af[:n]
+    af = (af - af.mean())
+    denom = np.linalg.norm(af)
+    if denom < 1e-9:
+        sys.exit("audio has no onsets to match")
+    af /= denom
+
+    scores = []
+    for k in range(0, 2 * lags + 1):
+        seg = mf[k:k + n]
+        seg = seg - seg.mean()
+        d = np.linalg.norm(seg)
+        scores.append(float(seg @ af / d) if d > 1e-9 else 0.0)
+    scores = np.array(scores)
+    best = int(np.argmax(scores))
+    offset_real = real_start + best / FPS
+
+    # Confidence: how far the winner stands above everything not adjacent to it.
+    mask = np.ones(len(scores), bool)
+    mask[max(0, best - int(FPS)):best + int(FPS)] = False
+    runner = scores[mask].max() if mask.any() else 0.0
+    margin = scores[best] - runner
+
+    print(f"\nbest match r = {scores[best]:.3f} at {offset_real:.3f}s real "
+          f"({offset_real*factor:.3f}s in the file)")
+    print(f"  shift from your guess: {offset_real - args.at:+.3f}s "
+          f"({(offset_real - args.at)*FPS:+.1f} frames at {FPS:g} fps)")
+    print(f"  next best elsewhere r = {runner:.3f}, margin {margin:.3f}")
+    if margin < 0.05 or scores[best] < 0.10:
+        print("  ** WEAK -- do not trust this. Confirm by eye, or widen --length.")
+    else:
+        print("  looks like a genuine lock, but confirm by eye before rendering.")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,20 +1,68 @@
-pip install -r requirements.txt
+# video-tools
 
-Convert Samplitude EDL to OpenTimelineIO:
-```
-python3.9 edl2otio.py --infile ~/Desktop/Erlebach.edl --track 1 --fps 29.97002997002997
+Tools for the video side of a recording session: reading what a camera actually
+recorded, lining footage up with audio from a separate recorder, and building a
+DaVinci Resolve project from a spec. Plus the older EDL/OTIO converters this repo
+started as (it was `edlutils` until 2026-08).
+
+Everything takes paths as arguments; nothing is specific to one session.
+
+## Camera and sync
+
+| Tool | Answers |
+|---|---|
+| `bin/sony-clip-info` | what the camera recorded: model, capture frame rate, shutter, ISO, white balance, embedded LUT, wall clock, **slow-motion factor**, silent audio |
+| `bin/camera-session-sync` | the clock offset between a camera and an audio recorder, and which clip covers which take |
+| `bin/motion-sync` | the last second of alignment, by correlating picture motion against audio onsets |
+| `bin/build-resolve-project` | a whole Resolve project — bins, clip attributes, colour management, timelines — from a YAML spec |
+
+Typical run, from a session folder:
+
+```bash
+sony-clip-info Video/                      # is any of this slow motion?
+camera-session-sync Video/ Media/ --project "Session.RPP"
+build-resolve-project resolve-project.yaml
 ```
 
-Convert Samplitude EDL to human-readable CSV edit decision list:
-```
-python3.9 edl2csv.py --infile ~/Desktop/Erlebach.edl --track 1 --fps 25
+### The two things that make this necessary
+
+**Slow motion invalidates every duration.** A camera in S&Q mode captures at one
+rate and writes the file at another, so the container declares a length that is a
+multiple of the time the clip really occupies. Nothing in the container says so;
+the capture rate is in the camera's own metadata track, which is what
+`sony-clip-info` reads. Symptoms are clips that appear to overlap and offsets
+that fit nothing.
+
+**Camera audio is often useless.** Sony records none at all in S&Q, so the usual
+correlate-the-scratch-audio method has nothing to work with. Both devices do have
+clocks, though, and the difference between them is constant over a session —
+`camera-session-sync` recovers it by voting on the moments an operator would have
+pressed record.
+
+Depth, and the traps worth reading before starting: `skills/camera-sync/SKILL.md`
+and `skills/davinci-resolve/SKILL.md`. Both are symlinked into `~/.claude/skills/`.
+
+## EDL and OTIO
+
+Older converters, unchanged:
+
+```bash
+python3 edl2otio.py --infile file.edl --track 1 --fps 25    # Samplitude EDL -> OTIO
+python3 edl2csv.py  --infile file.edl --track 1 --fps 25    # Samplitude EDL -> CSV
+python3 otio2edl.py                                         # OTIO -> EDL
+python3 csv2cmx3600.py                                      # CSV -> CMX3600 EDL
 ```
 
-Export Reaper region directly to OpenTimelineIO (bypassing EDL):
-```
+Reaper region → OTIO:
+
+```bash
 /Applications/REAPER.app/Contents/MacOS/REAPER "project.rpp" "region_to_otio.lua" -close:nosave:exit
 ```
 
-Configuration options in `region_to_otio.lua`:
-- `region_name`: Set to the region name to export (e.g., "E1")
-- `render_audio`: Set to `true` to also render a 48kHz/24-bit WAV mix of the region to `../Mixes/` folder
+Pyramix XML → Reaper multitrack: set the edit cursor in Reaper, run
+`apply_pyramix_xml_to_multitrack.lua`, give it the XML path.
+
+## Requirements
+
+`ffmpeg`/`ffprobe` on PATH, `numpy`, `pyyaml`. `build-resolve-project` needs
+DaVinci Resolve running with External scripting set to Local.

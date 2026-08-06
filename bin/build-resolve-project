@@ -1,0 +1,207 @@
+#!/usr/bin/env python3
+"""Build a DaVinci Resolve project from a YAML spec: bins, clip attributes, timelines.
+
+Clicking a project together is fine once. It stops being fine when the media has
+attributes that must be right and are invisible when they are wrong -- a log
+clip whose input colour space was never set looks merely flat, and a
+slow-motion clip left at its container rate looks merely wrong-length. A spec
+file makes those explicit, reviewable, and repeatable, and it can be rebuilt
+after someone reshuffles the bins.
+
+Requires Resolve to be RUNNING, with Preferences > System > General >
+"External scripting using" set to Local.
+
+Usage:
+    build-resolve-project spec.yaml
+    build-resolve-project spec.yaml --root /path/to/session   # resolve relative paths
+    build-resolve-project spec.yaml --dry-run
+
+Spec:
+
+    project: 2026-04-07 Brahms Faure
+    settings:                       # any Resolve project setting, by its API name
+      timelineResolutionWidth: "3840"
+      timelineResolutionHeight: "2160"
+      timelineFrameRate: "25"
+      colorScienceMode: davinciYRGBColorManagedv2
+      colorSpaceTimeline: Rec.709 Gamma 2.4
+      colorSpaceOutput: Rec.709 Gamma 2.4
+
+    bins:
+      - name: "01 Sony A-cam (S-Log3)"
+        glob: "Video/C0*.MP4"
+        properties:                 # applied to every clip in the bin
+          Data Level: Full          # NOT "Data Levels"; Resolve names it singular
+          Input Color Space: S-Gamut3.Cine/S-Log3
+          FPS: "50"                 # undoes 2x S&Q slow motion, losslessly
+
+    timelines:
+      - name: "Fauré — candidate A"
+        bin: "04 Timelines"
+        audio: "Fauré-001.wav"      # laid at the head of the timeline
+        clips:
+          - file: C0485.MP4
+            start: 10.828           # seconds into the clip, REAL time
+            duration: 83.131
+"""
+import argparse, glob, os, sys
+import yaml
+
+MODULES = "/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting/Modules/"
+
+
+def connect():
+    sys.path.append(MODULES)
+    try:
+        import DaVinciResolveScript as dvr
+    except ImportError:
+        sys.exit("cannot import DaVinciResolveScript -- is Resolve installed?")
+    r = dvr.scriptapp("Resolve")
+    if r is None:
+        sys.exit("Resolve is not answering. Start it, and set Preferences > System > "
+                 "General > 'External scripting using' to Local.")
+    return r
+
+
+def find_bin(mp, name):
+    root = mp.GetRootFolder()
+    for f in root.GetSubFolderList():
+        if f.GetName() == name:
+            return f
+    return mp.AddSubFolder(root, name)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("spec")
+    ap.add_argument("--root", help="base for relative paths (default: the spec's folder)")
+    ap.add_argument("--dry-run", action="store_true", help="say what would happen")
+    args = ap.parse_args()
+
+    spec = yaml.safe_load(open(args.spec, encoding="utf-8"))
+    root = args.root or os.path.dirname(os.path.abspath(args.spec))
+
+    def resolve_path(p):
+        return p if os.path.isabs(p) else os.path.join(root, p)
+
+    # Expand every glob first, so a typo in a path is reported before anything is
+    # created rather than halfway through building a project.
+    plan = []
+    for b in spec.get("bins", []):
+        pats = b.get("glob") or b.get("files") or []
+        if isinstance(pats, str):
+            pats = [pats]
+        files = []
+        for pat in pats:
+            hits = sorted(glob.glob(resolve_path(pat)))
+            if not hits:
+                print(f"  !! nothing matches {pat!r}")
+            files += hits
+        plan.append((b, files))
+        print(f"bin {b['name']!r}: {len(files)} files")
+
+    if args.dry_run:
+        for b, files in plan:
+            for f in files:
+                print(f"   {b['name']}  <- {os.path.basename(f)}")
+        for t in spec.get("timelines", []):
+            print(f"timeline {t['name']!r}: audio={t.get('audio')} "
+                  f"clips={[c['file'] for c in t.get('clips', [])]}")
+        return
+
+    resolve = connect()
+    pm = resolve.GetProjectManager()
+    name = spec["project"]
+    project = pm.CreateProject(name) or pm.LoadProject(name)
+    if not project:
+        sys.exit(f"could not create or open project {name!r}")
+    print(f"\nproject: {project.GetName()}")
+
+    # Applied in the order written, because some settings gate others: colour
+    # spaces are read-only until isAutoColorManage is 0, and setting them first
+    # is silently refused.
+    for k, v in (spec.get("settings") or {}).items():
+        ok = project.SetSetting(k, str(v))
+        got = project.GetSetting(k)
+        flag = "ok" if ok else "REFUSED"
+        print(f"  setting {k} = {v}   {flag}" + ("" if ok else f" (still {got!r})"))
+
+    mp = project.GetMediaPool()
+    ms = resolve.GetMediaStorage()
+    imported = {}                     # basename -> MediaPoolItem
+
+    for b, files in plan:
+        if not files:
+            continue
+        folder = find_bin(mp, b["name"])
+        mp.SetCurrentFolder(folder)
+        existing = {c.GetName(): c for c in folder.GetClipList()}
+        todo = [f for f in files if os.path.basename(f) not in existing]
+        items = ms.AddItemListToMediaPool(todo) if todo else []
+        for c in folder.GetClipList():
+            imported[c.GetName()] = c
+        print(f"\n{b['name']}: {len(items)} imported, "
+              f"{len(files) - len(todo)} already there")
+        props = b.get("properties") or {}
+        if props:
+            for c in folder.GetClipList():
+                for k, v in props.items():
+                    if not c.SetClipProperty(k, str(v)):
+                        print(f"    !! {c.GetName()}: {k} = {v} REFUSED")
+            shown = ", ".join(f"{k}={v}" for k, v in props.items())
+            print(f"    set on {len(folder.GetClipList())} clips: {shown}")
+
+    for t in spec.get("timelines", []):
+        tl_bin = t.get("bin", "Timelines")
+        mp.SetCurrentFolder(find_bin(mp, tl_bin))
+        tl = mp.CreateEmptyTimeline(t["name"])
+        if not tl:
+            print(f"\n!! could not create timeline {t['name']!r} (name already used?)")
+            continue
+        project.SetCurrentTimeline(tl)
+        fps = float(project.GetSetting("timelineFrameRate"))
+        start_frame = int(tl.GetStartFrame())
+        print(f"\ntimeline {t['name']!r} at {fps:g} fps, starts at frame {start_frame}")
+
+        if t.get("audio"):
+            a = imported.get(os.path.basename(t["audio"]))
+            if not a:
+                print(f"  !! audio {t['audio']!r} is not in any bin")
+            else:
+                mp.AppendToTimeline([{"mediaPoolItem": a, "mediaType": 2,
+                                      "trackIndex": 1, "recordFrame": start_frame}])
+                print(f"  audio  {a.GetName()}")
+
+        record = start_frame
+        for c in t.get("clips", []):
+            item = imported.get(os.path.basename(c["file"]))
+            if not item:
+                print(f"  !! {c['file']!r} is not in any bin")
+                continue
+            # startFrame/endFrame count in the CLIP's own frames, which after an
+            # FPS override are real-time frames at the capture rate.
+            cfps = float(item.GetClipProperty("FPS"))
+            sf = int(round(float(c.get("start", 0)) * cfps))
+            dur = float(c.get("duration", 0))
+            ef = sf + int(round(dur * cfps)) - 1
+            info = {"mediaPoolItem": item, "mediaType": 1, "trackIndex": 1,
+                    "startFrame": sf, "endFrame": ef,
+                    "recordFrame": int(round(record))}
+            if not mp.AppendToTimeline([info]):
+                print(f"  !! could not place {c['file']}")
+                continue
+            print(f"  video  {item.GetName()} frames {sf}-{ef} @{cfps:g}fps "
+                  f"({dur:.3f}s) at timeline frame {int(record)}")
+            record += round(dur * fps)
+
+        got = tl.GetItemListInTrack("video", 1) or []
+        print(f"  -> {len(got)} video items, timeline duration "
+              f"{(int(tl.GetEndFrame()) - start_frame) / fps:.3f}s")
+
+    pm.SaveProject()
+    print("\nsaved.")
+
+
+if __name__ == "__main__":
+    main()
