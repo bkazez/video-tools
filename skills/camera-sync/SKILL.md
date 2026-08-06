@@ -61,6 +61,15 @@ file start for a dozen performances, and most clips vote for nothing. The
 region starts in the edit are the moments someone actually pressed record. On
 one session this took the consensus from 3 votes to 5 and moved the answer.
 
+**This is a starting point, not an answer.** On `2026-04-07 Brahms Faure` it
+returned 194 s and the truth was 183.7 — ten seconds out, from a cluster of five
+agreeing pairs with a 4 s spread, including three roll-starts that landed within
+a second of a take start. It looked like a lock and was not. An operator does not
+press record at a repeatable moment relative to the downbeat, so the cluster is
+genuinely wide and its centre is not the offset. Treat the result as a place to
+begin checking, and **never build a timeline on it unverified** — ten seconds is
+a nudge on a one-minute take and ruins a six-minute one.
+
 Two things to check in the output rather than trusting the number:
 
 - **How many pairs agreed, and the spread.** A handful of agreeing clips with a
@@ -91,6 +100,25 @@ other moments. Always pass a guess and a window of a few seconds.
 so. On a locked-off close-up of a player's hands, continuous motion swamps the
 onsets and it will not lock at all — that is the tool working correctly.
 
+**Expect it to fail on sustained music.** It has never yet produced a usable
+answer on this repertoire. On a singer in a church, three windows over the same
+clip returned offsets 140 seconds apart, all with margins near zero: a singer's
+head moves continuously and on phrase shapes, not on onsets, so there is little
+for the flux to key on. It is worth one attempt because it costs a few minutes;
+it is not worth arguing with.
+
+Two ways to waste an afternoon here, both committed on the Brahms Faure session:
+
+- **Sampling a slow-motion clip at the wrong rate.** To land samples every 1/F of
+  *real* time, the file must be sampled at `F / factor`, because its own timeline
+  runs `factor` times longer than real time. Multiplying instead of dividing
+  stretches the motion signal by factor-squared and it correlates with nothing —
+  which reads exactly like "this method does not work" rather than like a bug.
+- **A reference with manufactured edges.** Assembling a session-wide envelope by
+  pasting take files into a silent background puts a 40 dB step at every take
+  boundary; those steps dominate the flux so completely that unrelated clips all
+  "align" to the same one. Correlate against a single continuous recording.
+
 ## Verify by looking, because arithmetic cannot see a mouth
 
 Never ship on the numbers. The check that settles it costs a minute:
@@ -106,6 +134,30 @@ Never ship on the numbers. The check that settles it costs a minute:
 
 A one-second error is glaring under this test and invisible under any amount of
 arithmetic.
+
+**Use the isolated mic, and step 1 is not optional.** On a voice-and-organ
+session the mix is loud through the singer's rests, so "loud moments" picked off
+the mix put an open mouth where there should be a closed one and the test
+contradicts itself. Off the vocal mic alone the same test separated the correct
+in-point from one ten seconds away on the first try.
+
+## When nothing automatic works, one hand alignment is enough
+
+Both automated routes can fail on the same session, and then the fastest path is
+to have the person who can hear it align **one** take by hand, and derive
+everything from that. Two clocks free-running over an evening keep a constant
+difference, so a single good anchor fixes the whole session:
+
+    offset = take_start_on_recorder − (camera_clock_at_clip_start + in_point)
+
+Verify it on a take far away in time — an anchor set at the top of the evening
+and confirmed ten minutes of camera clock later is worth more than any
+correlation coefficient. On Brahms Faure an anchor from the Fauré held exactly
+across to the Brahms, 640 s of camera clock later.
+
+**Always leave picture handles.** Give every timeline ten seconds of video before
+the audio and ten after. Sync will need nudging, and a timeline cut to the exact
+take length runs out of frame the moment anyone tries.
 
 ## When the picture is not what you assumed
 

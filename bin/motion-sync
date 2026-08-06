@@ -54,8 +54,13 @@ def motion_energy(path, start_file_s, dur_file_s, container_fps, capture_fps):
     the motion signal to twice its true length and never correlate.
     """
     rate = capture_fps or container_fps
-    # Decode at a fixed rate along the *file* axis, then rescale to real time.
-    file_fps = FPS * (rate / container_fps) if container_fps else FPS
+    # We want one sample every 1/FPS of REAL time. A slow-motion file's own
+    # timeline runs `factor` times longer than real time, so one real second is
+    # `factor` file seconds and the file must be sampled that much more SLOWLY.
+    # Multiplying here instead of dividing stretches the motion signal by
+    # factor-squared, which correlates against nothing and reads as "no lock".
+    factor = (rate / container_fps) if container_fps else 1.0
+    file_fps = FPS / factor
     p = run(["ffmpeg", "-v", "error", "-ss", str(start_file_s), "-t", str(dur_file_s),
              "-i", path, "-vf", f"fps={file_fps},scale={W}:{H},format=gray",
              "-f", "rawvideo", "-"])
