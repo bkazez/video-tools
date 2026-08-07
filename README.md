@@ -15,6 +15,7 @@ Everything takes paths as arguments; nothing is specific to one session.
 | `bin/camera-session-sync` | the clock offset between a camera and an audio recorder, and which clip covers which take |
 | `bin/motion-sync` | the last second of alignment, by correlating picture motion against audio onsets |
 | `bin/build-resolve-project` | a whole Resolve project — bins, clip attributes, colour management, timelines — from a YAML spec |
+| `bin/frame-noise` | how much noise is really in the picture, per channel — the number that sets a noise-reduction threshold |
 
 Typical run, from a session folder:
 

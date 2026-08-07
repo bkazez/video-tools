@@ -51,16 +51,22 @@ frames through it.
 
 ## Measure the noise every time, before and after — this is not optional
 
-Every grade gets a noise number alongside its level numbers. Take a flat dark
-patch, and report the standard deviation of its sample-to-sample differences:
+    bin/frame-noise source.MP4 --at 100
+    bin/frame-noise source.MP4 graded.mov --at 100     # the ratio, in one run
 
-    patch = Y[dark region];  patch = patch[patch < percentile(patch, 70)]
-    sigma = std(diff(patch))
+Every grade gets a noise number alongside its level numbers, for the ungraded
+conversion and for the grade, as a ratio. A grade is not finished until that
+ratio is stated. Skipping it is how a grade ships that measures beautifully and
+looks like static — it happened on this session and Ben caught it, not the
+measurements, because the measurements were not taken.
 
-Report it for the ungraded conversion and for the grade, as a ratio. A grade is
-not finished until that ratio is stated. Skipping it is how a grade ships that
-measures beautifully and looks like static — it happened on this session and the
-user caught it, not the measurements, because the measurements were not taken.
+**Measure across frames, not across pixels.** The old recipe here was
+`std(diff(patch))` over one frame, which cannot tell noise from texture: point it
+at out-of-focus stone and it reports the stone. `frame-noise` takes the
+per-pixel standard deviation over ~16 consecutive frames instead, so static
+detail contributes nothing and only what actually flickers is counted. It also
+prints a grid over the whole frame, because noise is level-dependent and one
+number never covers a picture.
 
 ## The trap: lifting shadows lifts the noise with them
 
@@ -113,13 +119,43 @@ Two sources of grain, and only one of them is the grade's fault:
 Check which you have before reaching for NR. A 1.3x amplification is the curve;
 a picture that is still noisy at 1.0x is the sensor.
 
+### Settings, and why "raise it until the grain goes" is the wrong instruction
+
+That instruction was in this file and it is what produced a background that
+"looks weird". Threshold above the noise does not remove grain, it removes
+low-contrast *detail* — and out-of-focus architecture is nothing but
+low-contrast detail, so it turns to a shifting plate while the grain it was aimed
+at was never worth the trade.
+
+**Set the threshold from the measurement instead.** Read `frame-noise`, and start
+at roughly the measured percentage, not above it:
+
+| measured luma | Temporal NR luma | chroma | spatial |
+|---|---|---|---|
+| under 0.5% | none | none | none |
+| ~1% | 3-5 | 5-8 | none |
+| ~2% | 6-10 | 10-15 | only if pattern noise remains |
+| over 3% | 12-18 | 18-25 | yes |
+
+Frames 2, Motion Est. Type Better, Motion Range **Small** for a locked-off shot —
+the range is how far it hunts for a match, and on a tripod there is nothing to
+hunt for, so a wider range only finds false matches in the background. Blend 0
+until it is otherwise right; Blend is a retreat, not a tuning control.
+
+Then converge by measurement, not by staring: render a few seconds, re-run
+`frame-noise`, and stop when the number is under about 0.5%. Going further buys
+nothing visible and costs texture.
+
+Chroma can run above luma at the same measured level because chroma NR is nearly
+free to the eye — but it is not free, and if chroma already measures under 0.5%
+there is nothing there to remove.
+
 **In Resolve** (Studio only) NR lives on the Color page's Motion Effects panel and
-is **not in the scripting API** — it cannot be applied in bulk from a script, so
-it is set on one clip and copied to the rest. Start with Temporal NR at 2 frames,
-motion estimation Better, and raise the luma threshold until the grain in a still
-background goes without the moving subject smearing; add Spatial NR only if the
-temporal pass leaves fixed-pattern noise. Temporal first, because it costs
-detail only where there is motion, and a locked-off shot has almost none.
+is **not in the scripting API** — confirmed against 21.0.4's own README, where the
+only `noiseReduction` parameter in the whole API belongs to the Super Scale
+upscaler. So it is set on one clip by hand. It travels with the grade, so
+`TimelineItem.CopyGrades([targets])` and `ApplyGradeFromDRX` are the bulk path;
+check the first propagated clip by eye before trusting the rest.
 
 ## Applying it across a project in Resolve
 

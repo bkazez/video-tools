@@ -1,0 +1,213 @@
+#!/usr/bin/env python3
+"""How much noise is actually in the picture, per channel, as a number.
+
+Noise reduction is otherwise tuned by staring: raise the threshold until the
+grain goes, notice the background has turned to plastic, back off, repeat. That
+loop has no target in it, and it is how a locked-off shot ends up with heavy
+temporal NR applied to grain that was barely there.
+
+    frame-noise Video/C0484.MP4 --at 100
+    frame-noise graded.mov --at 12 --region 2240,160,640,512
+    frame-noise a.mov b.mov --at 30 --json      # before and after a grade or an NR pass
+
+**The measurement.** On a locked-off shot, everything that changes between
+consecutive frames is either motion or noise. Take N frames, and for each pixel
+take its standard deviation over time: static detail contributes nothing, noise
+contributes all of itself. The median of that over the region is the noise
+amplitude, in code values out of 255.
+
+So the measurement is only noise where nothing moves. Rather than ask which part
+of the frame that is, this grids the frame and reports the **median cell**, then
+prints the whole grid so the reading can be checked against what is in the shot.
+
+Two defaults were wrong before this one, and both are worth knowing about:
+
+- *"The top-left eighth is usually background"* landed on a music stand and the
+  singer's hair, read 2.11% where the background was 1.01%, and upgraded the
+  verdict from "light grain" to "worth treating".
+- *"The quietest cell is the noise floor"* is true and useless: noise is
+  level-dependent, so the quietest cell is the brightest flattest patch in the
+  frame. On this session that was a lit sheet of music at 0.28%, while the dim
+  vault everyone was actually looking at read 1.0%.
+
+The median across cells survives both. The subject occupies a handful of cells
+out of 64, so it cannot move the median, and the median lands on background
+because most of a frame is background. The grid is printed anyway: it shows where
+the motion is, and it shows the level dependence directly.
+
+Pass `--region x,y,w,h` to pin the measurement somewhere specific instead.
+
+**Read luma and chroma separately, because they are treated separately.** Resolve
+gives Temporal and Spatial NR their own luma and chroma thresholds, and the two
+channels rarely need the same. On the 2026-04-07 Sony S-Log3 material the
+background measured 1.0-1.2% luma against 0.3-0.6% chroma, so chroma NR had
+almost nothing to do.
+
+**What the numbers mean.** Roughly, as a percentage of an 8-bit range:
+
+    under 0.5%   clean; NR will cost more detail than it removes noise
+    0.5 - 1.5%   light grain; gentle temporal NR only
+    1.5 - 3%     visible grain, worth treating
+    over 3%      heavy; expect to combine temporal and spatial
+
+The thresholds in Resolve's NR panel are a 0-100 scale with no published unit, so
+this does not convert into one. What it does is tell you whether you are treating
+1% of noise or 4%, and let you re-measure the render afterwards and see what the
+pass actually removed.
+"""
+import argparse
+import json
+import subprocess
+import sys
+
+import numpy as np
+
+
+def probe(path):
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+         "stream=width,height", "-of", "csv=p=0", str(path)],
+        capture_output=True, text=True, check=True).stdout.strip()
+    w, h = (int(x) for x in out.split(",")[:2])
+    return w, h
+
+
+def grab(path, at, frames, region):
+    """`frames` consecutive frames of `region`, as planar YUV 4:2:0."""
+    x, y, w, h = region
+    if w % 2 or h % 2 or x % 2 or y % 2:
+        sys.exit("frame-noise: region must be even in every value (4:2:0 chroma)")
+    raw = subprocess.run(
+        ["ffmpeg", "-v", "error", "-ss", f"{at:.3f}", "-i", str(path),
+         "-frames:v", str(frames), "-vf", f"crop={w}:{h}:{x}:{y}",
+         "-pix_fmt", "yuv420p", "-f", "rawvideo", "-"],
+        capture_output=True, check=True).stdout
+    size = w * h * 3 // 2
+    n = len(raw) // size
+    if n < 2:
+        sys.exit(f"frame-noise: got {n} frames at {at}s — past the end of the clip?")
+    buf = np.frombuffer(raw[:n * size], dtype=np.uint8).reshape(n, size)
+    return (buf[:, :w * h].reshape(n, h, w),
+            buf[:, w * h:w * h + w * h // 4].reshape(n, h // 2, w // 2),
+            buf[:, w * h + w * h // 4:].reshape(n, h // 2, w // 2))
+
+
+def noise(plane):
+    """Median per-pixel temporal standard deviation.
+
+    Median, not mean: a few pixels almost always do move — a head edge clipping
+    the region, a flicker, a leaf — and a mean lets those few decide the answer.
+    """
+    a = plane.astype(np.float32)
+    return float(np.median(a.std(axis=0))), float(a.mean())
+
+
+def cell_grid(path, at, frames, cells):
+    """Per-cell temporal sd for luma and both chroma planes, plus each cell's mean.
+
+    Returns (luma_grid, rows), where rows are dicts carrying every channel — the
+    grid is for display and the rows are what the median is taken over.
+    """
+    w, h = probe(path)
+    cw, ch = (w // cells) // 4 * 4, (h // cells) // 4 * 4
+    y, u, v = grab(path, at, frames, (0, 0, cw * cells, ch * cells))
+    luma, rows = [], []
+    for r in range(cells):
+        row = []
+        for c in range(cells):
+            cell = {}
+            for name, plane, s in (("Y", y, 1), ("U", u, 2), ("V", v, 2)):
+                block = plane[:, r * ch // s:(r + 1) * ch // s,
+                              c * cw // s:(c + 1) * cw // s]
+                sd, mean = noise(block)
+                cell[name] = (sd, mean)
+            row.append(cell["Y"][0])
+            rows.append(cell)
+        luma.append(row)
+    return luma, rows
+
+
+def measure(path, at, frames, region, cells=8):
+    out = {"file": str(path), "at": at, "frames": frames}
+    if region is not None:
+        planes = dict(zip("YUV", grab(path, at, frames, region)))
+        stats = {k: noise(p) for k, p in planes.items()}
+        out["region"] = list(region)
+    else:
+        luma, rows = cell_grid(path, at, frames, cells)
+        # Median over cells: the subject occupies a few cells out of `cells`
+        # squared, so it cannot move the median, and most of a frame is
+        # background. See the module docstring for the two defaults this replaced.
+        stats = {k: (float(np.median([r[k][0] for r in rows])),
+                     float(np.median([r[k][1] for r in rows]))) for k in "YUV"}
+        out["grid"] = luma
+        out["region"] = None
+    for name, (sd, mean) in stats.items():
+        out[name] = {"sd": round(sd, 2), "pct": round(100 * sd / 255, 2),
+                     "mean": round(mean, 1)}
+    out["chroma_pct"] = round(max(out["U"]["pct"], out["V"]["pct"]), 2)
+    return out
+
+
+def verdict(pct):
+    if pct < 0.5:
+        return "clean — NR would cost more detail than it removes"
+    if pct < 1.5:
+        return "light grain — gentle temporal NR only"
+    if pct < 3.0:
+        return "visible grain — worth treating"
+    return "heavy — expect temporal plus spatial"
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("clips", nargs="+", help="one or more video files")
+    ap.add_argument("--at", type=float, default=10.0,
+                    help="seconds into the clip (default 10)")
+    ap.add_argument("--frames", type=int, default=16,
+                    help="consecutive frames to measure over (default 16)")
+    ap.add_argument("--region", help="x,y,w,h in source pixels; default is the "
+                                     "quietest cell of a grid over the frame")
+    ap.add_argument("--cells", type=int, default=8,
+                    help="grid resolution across the frame (default 8)")
+    ap.add_argument("--json", action="store_true")
+    args = ap.parse_args()
+
+    region = None
+    if args.region:
+        parts = [int(x) for x in args.region.split(",")]
+        if len(parts) != 4:
+            sys.exit("frame-noise: --region wants x,y,w,h")
+        region = tuple(parts)
+
+    results = [measure(c, args.at, args.frames, region, args.cells)
+               for c in args.clips]
+    if args.json:
+        print(json.dumps(results, indent=1))
+        return
+
+    print(f"{'file':28} {'region':>20} {'luma':>14} {'chroma U':>10} {'chroma V':>10}")
+    print("-" * 86)
+    for r in results:
+        where = ("%dx%d+%d+%d" % tuple(r["region"])) if r["region"] \
+            else f"median of {args.cells}x{args.cells}"
+        print(f"{r['file'][-28:]:28} {where:>20} "
+              f"{r['Y']['sd']:6.2f} ({r['Y']['pct']:4.2f}%) "
+              f"{r['U']['pct']:9.2f}% {r['V']['pct']:9.2f}%")
+    print()
+    for r in results:
+        print(f"{r['file'][-28:]:28} {verdict(r['Y']['pct'])}")
+    for r in results:
+        if not r.get("grid"):
+            continue
+        print(f"\nper-cell luma sd, {r['file']} — high cells are the moving "
+              f"subject, not noise:")
+        for row in r["grid"]:
+            print("   " + " ".join(f"{v:6.2f}" for v in row))
+    print("\nNoise is level-dependent, so no single number covers the frame: the "
+          "grid is\nthe honest picture and the median is the summary.")
+
+
+if __name__ == "__main__":
+    main()
