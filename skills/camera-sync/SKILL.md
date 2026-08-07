@@ -144,11 +144,21 @@ have whoever can hear it align **one** take by hand, then derive the rest:
 
     offset = take_start_on_recorder − (camera_clock_at_clip_start + in_point)
 
-Two free-running clocks hold a constant difference across an evening, so a single
-good anchor fixes the whole session. Confirm it on a take far away in time — an
-anchor verified ten minutes of camera clock later is worth more than any
-correlation coefficient — and then generate every timeline from that one number,
-so a later correction is one edit rather than twenty.
+**Anchor once per CLIP, not once per session.** Two free-running clocks do hold a
+constant difference across an evening, so it is tempting to take one alignment
+and apply it everywhere. That fails, because a camera clock that reports whole
+seconds quantises every clip's start time independently: each clip inherits up to
+±1 s of its own error, and neighbouring clips can disagree by more than a second
+even with no drift at all.
+
+The signature is unmistakable once you look for it — corrections agreeing to a
+few frames across every take *within* a clip, and jumping by a second or so
+*between* clips. So:
+
+- align one take per clip by hand, and propagate that clip's offset to its other
+  takes, where it will be right to within a frame or two;
+- do not average across clips, and do not trust a single session-wide number;
+- a clip with only one take on it still needs its own alignment.
 
 **Always leave picture handles.** Ten seconds of video before the audio and ten
 after, on every timeline. Sync gets nudged, and a timeline cut to the exact take
