@@ -103,6 +103,46 @@ place the first clip at `GetStartFrame()`, not at 0.
 Creating a timeline whose name already exists returns `None` rather than
 erroring, which makes re-running a build script safe but silent; report it.
 
+## Fix the source project, not the output
+
+When something is wrong with the audio or the picture a timeline is built from,
+change the thing that produced it and re-render. Do not patch the render, and do
+not build a second folder of corrected copies beside the first.
+
+The temptation is real because patching is quick: a set of renders that come out
+quiet can be normalised in minutes, whereas raising them properly means finding
+the limiter in the mixing project and re-rendering. But the patched files are
+orphans. The next render out of the mixing project overwrites nothing and fixes
+nothing, the NLE goes on pointing at the copies, and now two folders disagree
+about what the mix is.
+
+Concretely, for the cases that keep coming up:
+
+| Problem | Wrong | Right |
+|---|---|---|
+| Renders too quiet for delivery | normalise the files, point the NLE at the copies | set the gain in the mastering chain (the limiter's threshold) and re-render |
+| A take's render stops mid-phrase | trim or crossfade in the NLE | move the region boundary in the mixing project |
+| A render is named badly | rename the file | rename the region; the render pattern does the rest |
+| Two competing render folders | keep both | one folder, named by the project's own convention |
+
+**One render folder per project.** Audio renders belong in the project's single
+canonical folder — `Mixes/` in these sessions — and the NLE links to that. Any
+second folder of "normalised" or "fixed" or "final" versions is a bug: it will
+drift, and the version the NLE is using stops being knowable at a glance.
+
+**Delivery loudness is a mastering setting, not a post-process.** Streaming
+platforms normalise to about -14 LUFS and only ever turn loud material DOWN, so
+anything delivered quieter simply plays quiet. Get there by lowering the master
+limiter's threshold and measuring the result, then verify the limiter is not
+paying for it: compare the loudness range before and after, and measure gain
+reduction against a render with the limiter bypassed. Brief transient catches are
+the limiter working; multi-second gain reduction is it being asked for too much.
+
+Relinking without disturbing an edit is `MediaPoolItem.ReplaceClip(path)`, which
+swaps the media behind a pool item and leaves every timeline position untouched.
+Verify by snapshotting each timeline item's start and end frames before and
+after — a relink that moves an edit has destroyed hand-alignment work.
+
 ## Disk
 
 Optimized media and render cache for a folder of 4K originals will fill a disk
