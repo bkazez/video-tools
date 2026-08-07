@@ -49,6 +49,19 @@ Per-channel curves add a little saturation on their own, so keep the explicit
 factor modest. Write it out as a `.cube` and verify by re-measuring the same
 frames through it.
 
+## Measure the noise every time, before and after — this is not optional
+
+Every grade gets a noise number alongside its level numbers. Take a flat dark
+patch, and report the standard deviation of its sample-to-sample differences:
+
+    patch = Y[dark region];  patch = patch[patch < percentile(patch, 70)]
+    sigma = std(diff(patch))
+
+Report it for the ungraded conversion and for the grade, as a ratio. A grade is
+not finished until that ratio is stated. Skipping it is how a grade ships that
+measures beautifully and looks like static — it happened on this session and the
+user caught it, not the measurements, because the measurements were not taken.
+
 ## The trap: lifting shadows lifts the noise with them
 
 **The local slope of the curve at a level is the noise gain at that level.** A
@@ -75,13 +88,38 @@ proportion. There is no control-point arrangement that escapes this.
 
 When that is the limit, the answer is not a better curve:
 
-- **Noise reduction first, then lift.** Temporal NR (Resolve Studio has it)
-  removes the grain, after which the shadows can be lifted freely. This is the
-  real unlock for a high-ISO interior and it is worth doing before spending more
-  time on the curve.
+- **Noise reduction first, then lift.** This is the real unlock for a high-ISO
+  interior, and it should come BEFORE the curve is finalised, not after — a grade
+  designed around ugly grain is a grade held back by it.
 - **A qualifier or mask** to lift the subject without the background.
 
 Say which limit you have hit rather than iterating a curve that cannot get there.
+
+### Noise reduction, and how much
+
+Work out the requirement rather than guessing at a slider. If the graded grain
+measures `sigma_g` and the source measures `sigma_0`, the grade has amplified it
+by `sigma_g / sigma_0`, and NR has to remove `20*log10(sigma_g/sigma_0)` dB just
+to get back to where the footage started — plus whatever the footage's own grain
+already costs.
+
+Two sources of grain, and only one of them is the grade's fault:
+
+- **What the curve added.** Bounded by the slope, and fixable by reshaping.
+- **What the footage arrived with.** 8-bit 4:2:0 log at high ISO is grainy in the
+  shadows no matter what; a grade that makes the picture viewable only reveals it.
+  No curve helps here.
+
+Check which you have before reaching for NR. A 1.3x amplification is the curve;
+a picture that is still noisy at 1.0x is the sensor.
+
+**In Resolve** (Studio only) NR lives on the Color page's Motion Effects panel and
+is **not in the scripting API** — it cannot be applied in bulk from a script, so
+it is set on one clip and copied to the rest. Start with Temporal NR at 2 frames,
+motion estimation Better, and raise the luma threshold until the grain in a still
+background goes without the moving subject smearing; add Spatial NR only if the
+temporal pass leaves fixed-pattern noise. Temporal first, because it costs
+detail only where there is motion, and a locked-off shot has almost none.
 
 ## Applying it across a project in Resolve
 
