@@ -177,3 +177,8 @@ pool items, and every timeline still references the old ones.
 `MediaPoolItem.ReplaceClipPreserveSubClip(path)` pointed at the path the clip
 already has is a reload: same item, same sub-clip extents, same timeline
 references, new audio. Run it after any re-render, then save in Resolve.
+
+`--prune-missing` also clears media pool items whose file has gone — but never
+one a timeline still uses, since deleting that would edit the timeline. Those are
+reported and left. A file being absent is not on its own a licence to change
+somebody's edit; delete the timeline first, then prune.

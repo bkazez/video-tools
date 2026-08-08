@@ -48,12 +48,26 @@ def walk(folder):
         yield from walk(sub)
 
 
+def timeline_usage(project):
+    """Which timelines each clip name appears in, so nothing in use is deleted."""
+    used = {}
+    for i in range(1, project.GetTimelineCount() + 1):
+        timeline = project.GetTimelineByIndex(i)
+        for kind in ("audio", "video"):
+            for track in range(1, timeline.GetTrackCount(kind) + 1):
+                for item in timeline.GetItemListInTrack(kind, track) or []:
+                    used.setdefault(item.GetName(), []).append(timeline.GetName())
+    return used
+
+
 def main():
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--bin", help="only this media pool folder (exact name)")
     ap.add_argument("--ext", default=".wav",
                     help="only clips with this extension (default .wav)")
+    ap.add_argument("--prune-missing", action="store_true",
+                    help="also delete media pool items whose file is gone")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
@@ -62,6 +76,7 @@ def main():
     print(f"project: {project.GetName()}")
 
     refreshed = missing = 0
+    gone = []
     for folder in walk(pool.GetRootFolder()):
         if args.bin and folder.GetName() != args.bin:
             continue
@@ -72,6 +87,8 @@ def main():
             if not os.path.exists(path):
                 print(f"  MISSING  {os.path.basename(path)}")
                 missing += 1
+                if args.prune_missing:
+                    gone.append((folder, clip, path))
                 continue
             if args.dry_run:
                 print(f"  would reload  {os.path.basename(path)}")
@@ -84,6 +101,24 @@ def main():
                 refreshed += 1
             else:
                 print(f"  FAILED    {os.path.basename(path)}", file=sys.stderr)
+
+    if gone:
+        # Deleting a clip that a timeline still uses would edit that timeline, so
+        # say which are in use and leave those alone. A file being absent is not
+        # on its own a licence to change someone's edit.
+        used = timeline_usage(project)
+        print()
+        for folder, clip, path in gone:
+            name = os.path.basename(path)
+            where = used.get(clip.GetName(), [])
+            if where:
+                print(f"  KEPT  {name}: still used by {', '.join(where[:3])}")
+            elif args.dry_run:
+                print(f"  would delete  {name}")
+            elif pool.DeleteClips([clip]):
+                print(f"  deleted  {name}")
+            else:
+                print(f"  FAILED to delete  {name}", file=sys.stderr)
 
     print(f"\n{refreshed} clip(s) {'would be ' if args.dry_run else ''}reloaded"
           + (f", {missing} missing" if missing else ""))
