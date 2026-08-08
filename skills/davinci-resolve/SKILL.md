@@ -164,3 +164,16 @@ load by name and save with `SaveProject()` rather than closing his.
 Resolve. A worked spec, with the colour settings for a two-camera S-Log3 and
 Rec.709 shoot, is
 `~/Documents/Music/Recordings/2026-04-07 Brahms Faure/resolve-project.yaml`.
+
+## Re-rendering a mix does not reach Resolve on its own
+
+Replacing `Mixes/Foo.wav` on disk changes nothing in an open project: Resolve
+holds a decoded copy and its own peak data, so timelines keep playing the audio
+they imported. Re-importing looks like the fix and is not — it creates new media
+pool items, and every timeline still references the old ones.
+
+    bin/resolve-refresh-media --bin "03 Audio (mix renders)"
+
+`MediaPoolItem.ReplaceClipPreserveSubClip(path)` pointed at the path the clip
+already has is a reload: same item, same sub-clip extents, same timeline
+references, new audio. Run it after any re-render, then save in Resolve.

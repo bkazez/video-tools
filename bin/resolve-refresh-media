@@ -1,0 +1,95 @@
+#!/usr/bin/env python3
+"""Make Resolve re-read media that changed on disk, without re-importing.
+
+    resolve-refresh-media --bin "03 Audio (mix renders)"
+    resolve-refresh-media --ext .wav --dry-run
+
+Re-rendering a mix to the same filename does **not** reach Resolve on its own. It
+holds a decoded copy and its own peak data, so a timeline keeps playing the audio
+it imported however many times the file underneath is replaced — which is why
+re-importing by hand has been the habit. Re-importing is the wrong fix, though:
+it creates new media pool items, and every timeline still points at the old ones.
+
+`MediaPoolItem.ReplaceClipPreserveSubClip(path)` swaps the underlying asset on the
+item the timelines already reference, keeping sub-clip extents. Pointing it at the
+file the clip already has is therefore a reload: same item, same edits, new audio.
+
+Run it after any re-render. Resolve must be open, with the project open.
+"""
+import argparse
+import os
+import sys
+
+sys.path.append("/Library/Application Support/Blackmagic Design/DaVinci Resolve/"
+                "Developer/Scripting/Modules")
+os.environ.setdefault(
+    "RESOLVE_SCRIPT_LIB",
+    "/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/Libraries/"
+    "Fusion/fusionscript.so")
+
+
+def connect():
+    try:
+        import DaVinciResolveScript as dvr
+    except ImportError:
+        sys.exit("resolve-refresh-media: Resolve's scripting module is not on the path")
+    resolve = dvr.scriptapp("Resolve")
+    if not resolve:
+        sys.exit("resolve-refresh-media: Resolve is not running")
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        sys.exit("resolve-refresh-media: no project is open")
+    return resolve, project
+
+
+def walk(folder):
+    yield folder
+    for sub in folder.GetSubFolderList():
+        yield from walk(sub)
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--bin", help="only this media pool folder (exact name)")
+    ap.add_argument("--ext", default=".wav",
+                    help="only clips with this extension (default .wav)")
+    ap.add_argument("--dry-run", action="store_true")
+    args = ap.parse_args()
+
+    resolve, project = connect()
+    pool = project.GetMediaPool()
+    print(f"project: {project.GetName()}")
+
+    refreshed = missing = 0
+    for folder in walk(pool.GetRootFolder()):
+        if args.bin and folder.GetName() != args.bin:
+            continue
+        for clip in folder.GetClipList():
+            path = clip.GetClipProperty("File Path")
+            if not path or not path.lower().endswith(args.ext.lower()):
+                continue
+            if not os.path.exists(path):
+                print(f"  MISSING  {os.path.basename(path)}")
+                missing += 1
+                continue
+            if args.dry_run:
+                print(f"  would reload  {os.path.basename(path)}")
+                refreshed += 1
+                continue
+            # Replacing a clip with its own path is the reload: the media pool
+            # item and every timeline reference survive, the asset is re-read.
+            if clip.ReplaceClipPreserveSubClip(path):
+                print(f"  reloaded  {os.path.basename(path)}")
+                refreshed += 1
+            else:
+                print(f"  FAILED    {os.path.basename(path)}", file=sys.stderr)
+
+    print(f"\n{refreshed} clip(s) {'would be ' if args.dry_run else ''}reloaded"
+          + (f", {missing} missing" if missing else ""))
+    if refreshed and not args.dry_run:
+        print("Save the project in Resolve to keep this.")
+
+
+if __name__ == "__main__":
+    main()
