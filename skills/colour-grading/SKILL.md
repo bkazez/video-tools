@@ -153,11 +153,41 @@ there is nothing there to remove.
 **In Resolve** (Studio only) NR lives on the Color page's Motion Effects panel and
 is **not in the scripting API** — confirmed against 21.0.4's own README, where the
 only `noiseReduction` parameter in the whole API belongs to the Super Scale
-upscaler. So it is set on one clip by hand. It travels with the grade, so
-`TimelineItem.CopyGrades([targets])` and `ApplyGradeFromDRX` are the bulk path;
-check the first propagated clip by eye before trusting the rest.
+upscaler. So it is set on one clip by hand, and it reaches every other clip only
+as part of a grade — see the propagation section below.
 
-## Applying it across a project in Resolve
+## Propagating one clip's grade to the whole project
+
+    bin/resolve-copy-grade --from "Fauré T14" --export-lut "session grade.cube" --save
+
+**`TimelineItem.CopyGrades([targets])` does not work across timelines.** It
+returns `True`, reports success on every target, and changes nothing whatsoever —
+measured on 21.0.4 against seventeen targets that all still held their old LUT
+node afterwards. Nothing in the README says so. If a project is one timeline per
+take, which is the normal shape here, this is the call that looks right and is
+useless.
+
+What works is the gallery: grab a still from the graded clip, `ExportStills(...,
+"drx")`, then `Graph.ApplyGradeFromDRX(path, 0)` on each target. That replaces
+whatever the target carried on that layer, LUT node included.
+
+Three API details that each cost a run: `GrabStill()` is on the **Timeline** and
+needs the Color page up and the playhead on the clip; `ApplyGradeFromDRX` is on
+the **Graph**, not the TimelineItem; `SaveProject()` is on the **ProjectManager**,
+not the Project. `ExportCurrentFrameAsStill()` is on the Project.
+
+**Verify by measurement, not by return value.** Read each target's node graph back
+(`GetToolsInNode`), and prove the look on a couple of them: export a still with
+the node enabled and again with `SetNodeEnabled(1, False)`, and compare the two —
+the ratio between them is the grade, and it should match the source clip's.
+
+**Export the grade to a `.cube` as well.** A grade lives only in the Resolve
+database, so a project rebuilt from a spec comes up ungraded and the look is gone;
+`TimelineItem.ExportLUT(resolve.EXPORT_LUT_33PTCUBE, path)` is the only copy that
+travels with the session in git. Pass the `resolve.EXPORT_LUT_*` constants, not
+the integers they happen to equal.
+
+## Applying a LUT across a project in Resolve
 
 `TimelineItem.SetLUT(nodeIndex, lutName)` where the name is relative to the LUT
 library. Two things make this fail silently:

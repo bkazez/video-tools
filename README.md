@@ -16,6 +16,7 @@ Everything takes paths as arguments; nothing is specific to one session.
 | `bin/motion-sync` | the last second of alignment, by correlating picture motion against audio onsets |
 | `bin/build-resolve-project` | a whole Resolve project — bins, clip attributes, colour management, timelines — from a YAML spec |
 | `bin/frame-noise` | how much noise is really in the picture, per channel — the number that sets a noise-reduction threshold |
+| `bin/resolve-copy-grade` | one clip's grade (and its noise reduction) on every other timeline in the project, plus the `.cube` that survives a rebuild |
 
 Typical run, from a session folder:
 

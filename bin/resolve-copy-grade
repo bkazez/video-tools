@@ -1,0 +1,198 @@
+#!/usr/bin/env python3
+"""Copy one clip's grade to every other timeline in the project.
+
+    resolve-copy-grade --from "Fauré T14"
+    resolve-copy-grade --from "Fauré T14" --only Brahms --dry-run
+    resolve-copy-grade --from "Fauré T14" --export-lut "session grade.cube" --save
+
+A session shot on one camera in one room wants one grade, but a grade is made on
+one clip: there is no project-wide correction to reach for, and matching by hand
+across twenty timelines is where drift comes from. This does the propagation, and
+it carries what nothing else can — noise reduction and the rest of Motion Effects
+are absent from the scripting API entirely, so a by-hand NR setting only ever
+reaches other clips as part of a grade.
+
+**Not `CopyGrades()`.** That is the obvious call and it does not work across
+timelines: it returns `True` and changes nothing at all, which is why this reads
+every target's node graph back afterwards and reports what it actually found.
+What does work is the gallery: grab a still from the source clip, export it as a
+`.drx`, and `Graph.ApplyGradeFromDRX()` on each target. The still is deleted from
+the gallery afterwards.
+
+The copy replaces whatever a target already carries on that node stack layer,
+including a LUT node, so a target's old look does not survive underneath.
+
+`--export-lut` bakes the source grade to a .cube as well, which is the only way
+the look survives a project rebuild — a rebuilt timeline comes up ungraded, and
+until it is exported the grade lives nowhere but the Resolve database.
+
+Resolve must be open, with the project open. This drives the Color page and the
+playhead to grab the still, and puts the original timeline back afterwards.
+"""
+import argparse
+import os
+import sys
+import tempfile
+import time
+
+sys.path.append("/Library/Application Support/Blackmagic Design/DaVinci Resolve/"
+                "Developer/Scripting/Modules")
+os.environ.setdefault(
+    "RESOLVE_SCRIPT_LIB",
+    "/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/Libraries/"
+    "Fusion/fusionscript.so")
+
+
+def connect():
+    try:
+        import DaVinciResolveScript as dvr
+    except ImportError:
+        sys.exit("resolve-copy-grade: Resolve's scripting module is not on the path")
+    resolve = dvr.scriptapp("Resolve")
+    if not resolve:
+        sys.exit("resolve-copy-grade: Resolve is not running")
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        sys.exit("resolve-copy-grade: no project is open")
+    return resolve, project
+
+
+def video_items(timeline):
+    items = []
+    for track in range(1, timeline.GetTrackCount("video") + 1):
+        items += timeline.GetItemListInTrack("video", track) or []
+    return items
+
+
+def describe(item):
+    """What this clip's grade is, read back out of its node graph."""
+    graph = item.GetNodeGraph()
+    parts = []
+    for node in range(1, graph.GetNumNodes() + 1):
+        tools = graph.GetToolsInNode(node) or ["no correction"]
+        parts.append("+".join(tools))
+    return f"{graph.GetNumNodes()} node(s): {' | '.join(parts)}"
+
+
+def grab_drx(resolve, project, timeline, item, folder):
+    """A .drx of this clip's grade, via a gallery still. Returns its path."""
+    previous = project.GetCurrentTimeline()
+    project.SetCurrentTimeline(timeline)
+    resolve.OpenPage("color")
+    time.sleep(2)                    # the page has to be up before a still lands
+    timeline = project.GetCurrentTimeline()
+    middle = timeline.GetStartFrame() + (item.GetStart() + item.GetEnd()) // 2
+    fps = float(project.GetSetting("timelineFrameRate"))
+    frames = int(round(fps))
+    seconds, frame = divmod(middle, frames)
+    minutes, second = divmod(seconds, 60)
+    hour, minute = divmod(minutes, 60)
+    timeline.SetCurrentTimecode(f"{hour:02d}:{minute:02d}:{second:02d}:{frame:02d}")
+    time.sleep(1)
+
+    gallery = project.GetGallery()
+    album = gallery.GetCurrentStillAlbum()
+    before = album.GetStills()
+    still = timeline.GrabStill()
+    if not still:
+        sys.exit("resolve-copy-grade: could not grab a still from the source clip")
+    if not album.ExportStills([still], folder, "grade", "drx"):
+        sys.exit("resolve-copy-grade: exporting the still as .drx failed")
+    album.DeleteStills([s for s in album.GetStills() if s not in before] or [still])
+    if previous:
+        project.SetCurrentTimeline(previous)
+
+    drx = [f for f in sorted(os.listdir(folder)) if f.endswith(".drx")]
+    if not drx:
+        sys.exit(f"resolve-copy-grade: no .drx appeared in {folder}")
+    return os.path.join(folder, drx[0])
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--from", dest="source", required=True,
+                    help="timeline holding the graded clip (substring match)")
+    ap.add_argument("--only", help="only apply to timelines matching this substring")
+    ap.add_argument("--export-lut", metavar="PATH",
+                    help="also bake the source grade to this .cube")
+    ap.add_argument("--lut-size", type=int, default=33, choices=(17, 33, 65),
+                    help="cube size for --export-lut (default 33)")
+    ap.add_argument("--save", action="store_true", help="save the project when done")
+    ap.add_argument("--dry-run", action="store_true")
+    args = ap.parse_args()
+
+    resolve, project = connect()
+    print(f"project: {project.GetName()}")
+
+    timelines = [project.GetTimelineByIndex(i)
+                 for i in range(1, project.GetTimelineCount() + 1)]
+    matches = [t for t in timelines if args.source.lower() in t.GetName().lower()]
+    if len(matches) != 1:
+        found = ", ".join(t.GetName() for t in matches) or "nothing"
+        sys.exit(f"resolve-copy-grade: --from '{args.source}' matched {found}")
+    source_timeline = matches[0]
+
+    source_items = video_items(source_timeline)
+    if len(source_items) != 1:
+        sys.exit(f"resolve-copy-grade: {source_timeline.GetName()} has "
+                 f"{len(source_items)} video clips; the source must have exactly one")
+    source = source_items[0]
+    print(f"from: {source_timeline.GetName()} / {source.GetName()} — {describe(source)}")
+
+    targets, skipped = [], []
+    for timeline in timelines:
+        if timeline == source_timeline:
+            continue
+        if args.only and args.only.lower() not in timeline.GetName().lower():
+            skipped.append(timeline.GetName())
+            continue
+        for item in video_items(timeline):
+            targets.append((timeline, item))
+
+    if skipped:
+        print(f"skipping {len(skipped)} timeline(s) not matching --only "
+              f"'{args.only}': {', '.join(skipped[:4])}"
+              + (" …" if len(skipped) > 4 else ""))
+
+    print(f"\n{len(targets)} target clip(s), before:")
+    for timeline, item in targets:
+        print(f"  {timeline.GetName():30s} {describe(item)}")
+
+    if args.dry_run:
+        print("\n--dry-run: nothing changed")
+        return
+
+    want = describe(source)
+    with tempfile.TemporaryDirectory(prefix="resolve-copy-grade.") as folder:
+        drx = grab_drx(resolve, project, source_timeline, source, folder)
+        print(f"\nsource grade exported to {os.path.basename(drx)}; applying:")
+        wrong = 0
+        for timeline, item in targets:
+            applied = item.GetNodeGraph().ApplyGradeFromDRX(drx, 0)
+            got = describe(item)
+            ok = bool(applied) and got == want
+            wrong += not ok
+            print(f" {'  ' if ok else '!!'} {timeline.GetName():30s} {got}")
+
+    if args.export_lut:
+        path = os.path.abspath(args.export_lut)
+        size = {17: resolve.EXPORT_LUT_17PTCUBE,
+                33: resolve.EXPORT_LUT_33PTCUBE,
+                65: resolve.EXPORT_LUT_65PTCUBE}[args.lut_size]
+        exported = source.ExportLUT(size, path) and os.path.exists(path)
+        print(f"\n{args.lut_size}-point cube -> {path}: {exported}")
+        if not exported:
+            wrong += 1
+
+    if args.save:
+        print(f"SaveProject: {resolve.GetProjectManager().SaveProject()}")
+    else:
+        print("\nSave the project in Resolve to keep this.")
+
+    if wrong:
+        sys.exit(f"resolve-copy-grade: {wrong} step(s) did not do what they claimed")
+
+
+if __name__ == "__main__":
+    main()
