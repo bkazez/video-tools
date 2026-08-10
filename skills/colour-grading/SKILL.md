@@ -1,6 +1,6 @@
 ---
 name: colour-grading
-description: Load BEFORE grading footage — building a look, fixing a dark or flat picture, deciding a tone curve, or judging whether a grade is working. Also load when a task mentions log footage looking flat, lifted blacks, crushed shadows, grain or noise appearing after a grade, skin tones, a LUT, or applying a grade across a whole project.
+description: Load BEFORE grading footage — building a look, fixing a dark or flat picture, deciding a tone curve, judging whether a grade is working, or correcting a colour cast. Also load when a task mentions log footage looking flat, lifted blacks, crushed shadows, grain or noise appearing after a grade, skin tones, white balance, a white that is not white, a LUT, or applying a grade across a whole project.
 ---
 
 # Grading from measurements, not from taste alone
@@ -35,6 +35,33 @@ The numbers that decide the grade:
 A log conversion LUT deliberately leaves headroom: it is a *starting point*, not
 a look. A picture whose peak never exceeds 50% has simply never been graded, and
 that is the common case — not an exposure problem.
+
+## Is the white white, and is the cast the light or the framing
+
+    bin/frame-balance Video/C0485.MP4 --at 30 --gain 1.606
+
+A cast survives an eye check in both directions: a warm room is *supposed* to look
+warm, so "it looks fine" hides a real cast, and a corrected shot reads as cold to
+anyone who has been staring at the uncorrected one. So measure the brightest
+near-neutral patch in the frame — a white shirt, a lit page, plaster — and read its
+R:G:B. The per-channel gain that lands it at R = G = B is the correction, and
+because a constant multiply in a gamma-encoded space is a constant multiply in
+linear light, it neutralises at every level, not just at the patch.
+
+**Then check it against skin before you believe it.** A white-patch reading is only
+as good as the patch: tighten the framing and the brightest neutral thing changes
+from the page to the shirt, and the "cast" moves with it. Skin is the same object
+in every shot of the same person, so compare its R/G and B/G between the shots in
+question. If skin agrees and the patch disagrees, the difference was framing and
+one trim serves both. If skin disagrees too, the light really moved and each group
+of clips needs its own number. On one session the patch said the two pieces were
+4-5% apart and skin confirmed it at +4.8% R/G and -8.5% B/G — different light, two
+trims, and after them the skin gap closed to within the take-to-take scatter.
+
+**A white balance is a look decision as much as a correction.** Neutralising the
+illuminant also cools everything that was warm because the light was warm. Leaving
+1-2% of the original bias is usually right in a warm room: the white reads white
+and the stone still reads warm.
 
 ## Design the curve against those numbers
 
@@ -181,11 +208,24 @@ not the Project. `ExportCurrentFrameAsStill()` is on the Project.
 the node enabled and again with `SetNodeEnabled(1, False)`, and compare the two —
 the ratio between them is the grade, and it should match the source clip's.
 
-**Export the grade to a `.cube` as well.** A grade lives only in the Resolve
-database, so a project rebuilt from a spec comes up ungraded and the look is gone;
-`TimelineItem.ExportLUT(resolve.EXPORT_LUT_33PTCUBE, path)` is the only copy that
-travels with the session in git. Pass the `resolve.EXPORT_LUT_*` constants, not
-the integers they happen to equal.
+**Make the grade survive a rebuild.** It lives only in the Resolve database, so a
+project rebuilt from its spec comes up ungraded. Two ways out, and prefer the first
+when it applies:
+
+- **If the grade is a per-channel gain** — a white balance, an exposure trim, or
+  both — it is three numbers per group of clips. Write them in the session notes
+  and re-apply with `bin/resolve-set-cdl --slope "R G B"`. Text, diffable, and it
+  says what it means; a 33³ cube of the same thing does not.
+- **Otherwise export a cube:**
+  `TimelineItem.ExportLUT(resolve.EXPORT_LUT_33PTCUBE, path)`. Pass the
+  `resolve.EXPORT_LUT_*` constants, not the integers they happen to equal.
+
+**`SetCDL()` replaces the node's primary correction — it does not stack on it.**
+Write 0.9 over a hand-made 1.6 and the clip ends up at 0.9, not 1.44, so the slope
+you write must be the total you want (multiply the trim into the gain yourself).
+There is no `GetCDL` and no `AddNode` in the API, so it cannot be read back and a
+second node is not available: the only proof is a still with the node enabled
+against one with it disabled.
 
 ## Applying a LUT across a project in Resolve
 
