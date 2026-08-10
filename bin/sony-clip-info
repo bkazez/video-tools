@@ -151,8 +151,15 @@ CHECKS = {
 
 
 def compare(got, want):
-    """want may be a bare value or carry <=, >=, <, > . Returns (ok, why)."""
+    """want may be a bare value, `<=`/`>=`/`<`/`>` , or a `LO..HI` range."""
     text = str(want).strip()
+    if ".." in text:
+        low, _, high = text.partition("..")
+        try:
+            value, low, high = float(got), float(low), float(high)
+        except (TypeError, ValueError):
+            return False, f"{got!r} is not a number to compare against {text}"
+        return low <= value <= high, f"{got:g} vs {low:g}..{high:g}"
     for op in ("<=", ">=", "<", ">"):
         if text.startswith(op):
             try:
@@ -162,7 +169,6 @@ def compare(got, want):
             ok = {"<=": value <= limit, ">=": value >= limit,
                   "<": value < limit, ">": value > limit}[op]
             return ok, f"{got} vs {op}{limit:g}"
-        text_l = text
     try:
         ok = float(got) == float(text)
     except (TypeError, ValueError):

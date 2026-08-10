@@ -1,0 +1,30 @@
+# Highest-quality cinematic 4K where the mains is 50 Hz (Europe, UK).
+#
+#     sony-clip-info --deep --expect profiles/sony-4k-cinematic-pal.yml CLIP.MP4
+#     camera-card-check --install-agent --expect profiles/sony-4k-cinematic-pal.yml
+#
+# 25p at 1/50 is the one combination that is both a 180-degree shutter and an exact
+# multiple of the 100 Hz flicker of 50 Hz mains light. It is also the higher bit
+# rate on this body: XAVC S 4K 25p is 140M against 24p's 100M.
+#
+# Camera setup that produces this: docs/sony-zv-e10ii-presets.md
+
+resolution: 3840x2160
+bit_depth: 10
+chroma: "422"
+
+container_fps: 25
+capture_fps: 25
+slowmo: "no"          # S&Q bakes in slow motion and records no audio
+audio: has_signal
+
+# 1/50 at 25p is 180 degrees. The failure to catch is auto shutter picking something
+# far faster: a clip measured 70 degrees on 2026-06-20, which reads staccato.
+shutter_angle: "150..200"
+
+log: "yes"            # S-Log3; set to "no" if the preset uses S-Cinetone instead
+
+# Dual base ISO is 800 and 2500 in S-Log3, so those two are the clean stops and
+# 2500 is cleaner than 1600. Above 2500 the grade starts fighting grain — a FAIL
+# here in a genuinely dark room is information, not an error.
+iso: "<=2500"

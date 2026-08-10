@@ -33,6 +33,7 @@ import glob
 import json
 import os
 import plistlib
+import shutil
 import subprocess
 import sys
 import time
@@ -63,11 +64,35 @@ CLIP_GLOBS = [
 
 
 def notify(title, message):
-    """A macOS notification. Best effort — never let this fail the check."""
+    """Post a macOS notification, and say what happened.
+
+    `osascript` exits 0 even when macOS drops the banner, because the posting
+    identity (Script Editor, under launchd) may have notifications turned off. So
+    this reports which channel it used rather than assuming it was seen, and the
+    caller makes a failure visible another way.
+    """
+    tn = shutil.which("terminal-notifier")
+    if tn:
+        done = subprocess.run([tn, "-title", title, "-message", message],
+                              capture_output=True, text=True, timeout=20)
+        if done.returncode == 0:
+            return "terminal-notifier"
     script = (f'display notification {json.dumps(message)} '
               f'with title {json.dumps(title)}')
     try:
-        subprocess.run(["osascript", "-e", script], capture_output=True, timeout=10)
+        done = subprocess.run(["osascript", "-e", script],
+                              capture_output=True, text=True, timeout=20)
+        if done.returncode == 0:
+            return "osascript (banner may be suppressed by notification settings)"
+        return f"osascript failed: {done.stderr.strip()[:120]}"
+    except Exception as exc:
+        return f"no notification: {exc}"
+
+
+def make_visible(path):
+    """Open the log in a window. The one signal no permission can silence."""
+    try:
+        subprocess.run(["open", "-t", path], capture_output=True, timeout=20)
     except Exception:
         pass
 
@@ -92,7 +117,7 @@ def clips_on(volume):
     return sorted(real, key=os.path.getmtime, reverse=True)
 
 
-def check(volume, profile, count, quiet_ok):
+def check(volume, profile, count, quiet_ok, quiet_fail_window=False):
     clips = clips_on(volume)
     if not clips:
         return None                      # not a camera card; say nothing at all
@@ -108,10 +133,11 @@ def check(volume, profile, count, quiet_ok):
     if failures:
         first = failures[0].split(None, 2)
         detail = first[2] if len(first) > 2 else "settings do not match"
-        notify(f"Camera card {label}: WRONG SETTINGS", detail[:220])
+        print(f"notify: {notify(f'Camera card {label}: WRONG SETTINGS', detail[:220])}")
+        if not quiet_fail_window:
+            make_visible(LOG_PATH)
     elif not quiet_ok:
-        notify(f"Camera card {label}: settings OK",
-               f"{os.path.basename(newest[0])} matches {os.path.basename(profile)}")
+        print(f"notify: {notify(f'Camera card {label}: settings OK', f'{os.path.basename(newest[0])} matches {os.path.basename(profile)}')}")
     return bool(failures)
 
 
@@ -157,6 +183,8 @@ def main():
     ap.add_argument("--clips", type=int, default=1, help="how many newest clips to check")
     ap.add_argument("--quiet-ok", action="store_true",
                     help="only notify when something is wrong")
+    ap.add_argument("--no-window", action="store_true",
+                    help="on a failure, do not open the log in a window")
     ap.add_argument("--settle", type=float, default=20.0,
                     help="seconds to keep retrying while no volume shows clips yet "
                          "(a mount is not readable the instant launchd fires)")
@@ -181,7 +209,8 @@ def main():
             break
         time.sleep(2)
 
-    verdicts = [check(v, os.path.abspath(args.expect), args.clips, args.quiet_ok)
+    verdicts = [check(v, os.path.abspath(args.expect), args.clips, args.quiet_ok,
+                      args.no_window)
                 for v in volumes]
     looked_at = [v for v in verdicts if v is not None]
     if not looked_at:

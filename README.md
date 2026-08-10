@@ -24,9 +24,13 @@ Everything takes paths as arguments; nothing is specific to one session.
 
 `sony-clip-info --expect` is the pre-shoot check: assert bit depth, chroma, slow
 motion, audio, ISO and shutter against the card before the day is spent.
-`profiles/sony-log-video.yml` is a worked set of assertions to copy. When there is
-no time on the day, `camera-card-check --install-agent` moves the same check to
-offload, where it costs nothing.
+`profiles/` holds worked sets of assertions to copy: `sony-log-video.yml`, and
+`sony-4k-cinematic-pal.yml` / `sony-4k-cinematic-ntsc.yml` for 50 Hz and 60 Hz
+regions. When there is no time on the day, `camera-card-check --install-agent`
+moves the same check to offload, where it costs nothing.
+
+`docs/sony-zv-e10ii-presets.md` is the camera-side half: what to set, why the US
+shutter is not 1/48, and how to register it so it survives a reset.
 
 Typical run, from a session folder:
 

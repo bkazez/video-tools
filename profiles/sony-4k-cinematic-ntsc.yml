@@ -1,0 +1,34 @@
+# Highest-quality cinematic 4K where the mains is 60 Hz (US).
+#
+#     sony-clip-info --deep --expect profiles/sony-4k-cinematic-ntsc.yml CLIP.MP4
+#     camera-card-check --install-agent --expect profiles/sony-4k-cinematic-ntsc.yml
+#
+# 24p is the film cadence, but 1/48 is NOT safe under 60 Hz mains: that light
+# flickers at 120 Hz, a period of 8.33 ms, and 1/48 is 20.83 ms = 2.5 periods, so it
+# bands. The flicker-safe shutters at 24p are 1/60 (144 degrees) and 1/40 (216
+# degrees) — equally far from 180 in opposite directions. 1/60 is the convention.
+#
+# Under daylight or flicker-free LED only, 1/48 is fine and is a true 180 degrees;
+# widen the shutter_angle range below if that is the shoot.
+#
+# Camera setup that produces this: docs/sony-zv-e10ii-presets.md
+
+resolution: 3840x2160
+bit_depth: 10
+chroma: "422"
+
+container_fps: 23.976
+capture_fps: 23.976
+slowmo: "no"          # S&Q bakes in slow motion and records no audio
+audio: has_signal
+
+# 1/60 at 24p is 144 degrees; 1/48 is 180. This range accepts either and still
+# catches auto shutter running away — a clip measured 70 degrees on 2026-06-20.
+shutter_angle: "130..200"
+
+log: "yes"            # S-Log3; set to "no" if the preset uses S-Cinetone instead
+
+# Dual base ISO is 800 and 2500 in S-Log3, so those two are the clean stops and
+# 2500 is cleaner than 1600. Above 2500 the grade starts fighting grain — a FAIL
+# here in a genuinely dark room is information, not an error.
+iso: "<=2500"
