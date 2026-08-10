@@ -1,0 +1,189 @@
+#!/usr/bin/env python3
+"""Capture what Resolve actually plays, and count the clicks in it.
+
+    resolve-audio-check --seconds 20 --at 00:00:40:00
+    resolve-audio-check --page color --page fairlight --seconds 18   # A/B the pages
+    resolve-audio-check --keep /tmp/playback.wav
+
+Resolve's monitoring can click while the media and the render are clean, so the
+only way to settle it is to record the engine's own output and measure it. This
+plays the current timeline, captures it through a loopback device, and reports
+click-like discontinuities per second.
+
+**Set Resolve's own audio output to the loopback device first** (Preferences →
+System, the audio section → BlackHole 2ch). Do that rather than switching the Mac's
+default output: switching the system device steals monitoring from everything else,
+and if this tool is killed mid-run it cannot put it back.
+
+Three things this gets right that cost a lot to learn:
+
+- **It never sends a keystroke unless Resolve owns the keyboard.** It activates
+  Resolve, polls the frontmost process, and aborts rather than typing into whatever
+  else has focus. An earlier version pressed play into a web browser.
+- **It presses L and K, not space.** Space toggles, so a retry loop built on it
+  alternates play and stop and reports whichever state it lands in.
+- **It makes no scripting-API calls while playback is running.** Polling the
+  timecode during playback hangs the API, which looks exactly like a stuck script.
+
+A click here is a sample-to-sample jump far outside the local distribution, grouped
+into events. Under 0.2/s is clean; the Color page on 21.0.4 measured 3.7-5.8/s
+against 0.06/s on Edit and Fairlight.
+"""
+import argparse
+import os
+import subprocess
+import sys
+import tempfile
+import time
+
+sys.path.append("/Library/Application Support/Blackmagic Design/DaVinci Resolve/"
+                "Developer/Scripting/Modules")
+os.environ.setdefault(
+    "RESOLVE_SCRIPT_LIB",
+    "/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/Libraries/"
+    "Fusion/fusionscript.so")
+
+PLAY_KEY, STOP_KEY = 37, 40          # L and K, which are not toggles
+SR = 48000
+
+
+def connect():
+    try:
+        import DaVinciResolveScript as dvr
+    except ImportError:
+        sys.exit("resolve-audio-check: Resolve's scripting module is not on the path")
+    resolve = dvr.scriptapp("Resolve")
+    if not resolve:
+        sys.exit("resolve-audio-check: Resolve is not running")
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        sys.exit("resolve-audio-check: no project is open")
+    return resolve, project
+
+
+def osa(script, timeout=20):
+    return subprocess.run(["osascript", "-e", script], capture_output=True,
+                          text=True, timeout=timeout)
+
+
+def frontmost():
+    try:
+        return osa('tell application "System Events" to name of first '
+                   'application process whose frontmost is true').stdout.strip()
+    except subprocess.TimeoutExpired:
+        return "?"
+
+
+def claim_keyboard(tries=12):
+    """True only when Resolve really has focus. Never type blind."""
+    osa('tell application "DaVinci Resolve" to activate')
+    for _ in range(tries):
+        time.sleep(0.6)
+        if "resolve" in frontmost().lower():
+            return True
+    return False
+
+
+def clicks(path):
+    """(seconds, peak, event times) — discontinuities against the local level."""
+    import numpy as np
+    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", path, "-f", "f32le",
+                          "-ar", str(SR), "-ac", "2", "-"], capture_output=True).stdout
+    a = np.frombuffer(raw, "<f4").reshape(-1, 2)
+    if a.size == 0:
+        return 0.0, 0.0, []
+    x = a.mean(1)
+    d = np.abs(np.diff(x))
+    win = int(0.02 * SR)
+    pad = np.pad(d, (win, win), mode="edge")
+    local = np.repeat(np.array([pad[i:i + 2 * win].mean()
+                                for i in range(0, len(d), 64)]), 64)[:len(d)]
+    hits = np.nonzero(d / np.maximum(local, 1e-7) > 25)[0]
+    events = []
+    for h in hits:
+        if events and h - events[-1] < 0.01 * SR:
+            continue
+        events.append(int(h))
+    return len(x) / SR, float(np.abs(a).max()), [e / SR for e in events]
+
+
+def grab(resolve, project, page, at, seconds, device, out):
+    resolve.OpenPage(page)
+    time.sleep(1.3)
+    timeline = project.GetCurrentTimeline()
+    if not timeline:
+        sys.exit("resolve-audio-check: no timeline is open")
+    if at:
+        for _ in range(3):
+            timeline.SetCurrentTimecode(at)
+            time.sleep(0.6)
+            if timeline.GetCurrentTimecode() == at:
+                break
+    where = timeline.GetCurrentTimecode()
+    if not claim_keyboard():
+        sys.exit(f"resolve-audio-check: aborted without sending any key — frontmost "
+                 f"app is {frontmost()!r}, not Resolve")
+    osa(f'tell application "System Events" to key code {PLAY_KEY}')
+    time.sleep(1.5)
+    cap = subprocess.run(["arc", "capture", "--device", device, "--seconds", str(seconds),
+                          "--rate", str(SR), "--out", out],
+                         capture_output=True, text=True, timeout=seconds + 60)
+    osa(f'tell application "System Events" to key code {STOP_KEY}')
+    if cap.returncode:
+        sys.exit(f"resolve-audio-check: arc capture failed: {cap.stderr.strip()[:200]}")
+    return timeline.GetName(), where
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--page", action="append", default=[],
+                    help="page to play on; repeat to A/B (default color)")
+    ap.add_argument("--at", help="timecode to play from (default wherever it is)")
+    ap.add_argument("--seconds", type=int, default=18)
+    ap.add_argument("--device", default="BlackHole 2ch", help="loopback capture device")
+    ap.add_argument("--keep", metavar="PATH",
+                    help="keep the capture (one page only; default a temp file)")
+    args = ap.parse_args()
+    pages = args.page or ["color"]
+    if args.keep and len(pages) > 1:
+        sys.exit("resolve-audio-check: --keep takes a single --page")
+
+    resolve, project = connect()
+    print(f"project: {project.GetName()}   loopback: {args.device}")
+    rows = []
+    with tempfile.TemporaryDirectory(prefix="resolve-audio-check.") as tmp:
+        for page in pages:
+            out = args.keep or os.path.join(tmp, f"{page}.wav")
+            name, where = grab(resolve, project, page, args.at, args.seconds, args.device, out)
+            secs, peak, events = clicks(out)
+            rate = len(events) / secs if secs else 0.0
+            # A silent capture is not a clean one. Playback may simply not have
+            # started, and counting that as "no clicks" is how a broken page gets
+            # declared healthy.
+            signal = peak >= 0.001
+            rows.append((page, secs, peak, len(events), rate, signal))
+            verdict = f"{len(events):4d} clicks  {rate:5.2f}/s" if signal else \
+                      "NO SIGNAL — playback never reached the loopback, so this proves nothing"
+            print(f"  {page:10s} {name} @ {where}   {secs:4.1f}s  peak {peak:.3f}   {verdict}")
+            if args.keep:
+                print(f"  kept {args.keep}")
+
+    heard = [r for r in rows if r[5]]
+    quiet = [r for r in rows if not r[5]]
+    if quiet:
+        print(f"\nno signal from: {', '.join(r[0] for r in quiet)} — rerun those; "
+              "playback did not start or Resolve is not routed to the loopback")
+    if len(heard) > 1:
+        best, worst = min(heard, key=lambda r: r[4]), max(heard, key=lambda r: r[4])
+        if worst[4] > 10 * max(best[4], 0.01):
+            print(f"\n{worst[0]} clicks {worst[4] / max(best[4], 0.01):.0f}x more than "
+                  f"{best[0]} — the page is the variable, not the audio.")
+    if heard and max(r[4] for r in heard) < 0.2:
+        print("\nclean: nothing here would be audible as clicking")
+    if not heard:
+        sys.exit("resolve-audio-check: nothing was captured on any page")
+
+
+if __name__ == "__main__":
+    main()

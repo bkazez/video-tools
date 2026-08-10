@@ -194,3 +194,52 @@ references, new audio. Run it after any re-render, then save in Resolve.
 one a timeline still uses, since deleting that would edit the timeline. Those are
 reported and left. A file being absent is not on its own a licence to change
 somebody's edit; delete the timeline first, then prune.
+
+## Audio that clicks on playback is the Color page, not your audio
+
+Measured on 21.0.4, one timeline, one 48 kHz file, one loopback device, only the
+open page changing:
+
+| page | click-like events |
+|---|---|
+| Color | 3.7 - 5.8 per second |
+| Edit | 0.06 per second |
+| Fairlight | 0.06 per second |
+
+Every event is the same defect: **256 samples (5.33 ms) of exact digital zero**,
+starting at a fixed phase within a 4096-sample buffer, cut in mid-waveform at
+levels like 0.62 and -0.40 — nowhere near a zero crossing, which is why it clicks
+going in and coming out. Resolve is failing to fill one 256-sample block of the
+buffer.
+
+What it is NOT, each ruled out by measurement rather than argument:
+
+- **Not the interface or its rate.** It survives every output device, and a device
+  at 96 kHz against Resolve's fixed 48 kHz engine is not the cause — tempting as
+  that mismatch looks.
+- **Not the media.** The source file measured 0.01 events/s; the same file played by
+  ffmpeg through the same loopback measured 0.09/s against Resolve's 5.8/s.
+- **Not video decode.** Disabling the video clip on the same timeline changed
+  nothing (5.00/s against 5.10/s).
+- **Not CPU starvation.** Resolve sat at 16-82% throughout.
+
+So a session that clicks while grading is monitoring, not damage: what renders is
+clean. To actually listen, switch to Edit or Fairlight.
+
+    bin/resolve-audio-check --page color --page fairlight --seconds 18
+
+That plays, captures through a loopback and counts the events. Point Resolve's own
+audio output at the loopback device rather than switching the Mac's default, so
+nothing else loses monitoring.
+
+**Two traps in driving playback by keystroke.** Space is a toggle, so a retry loop
+built on it alternates play and stop; L and K are unambiguous. And the scripting
+API hangs if you poll it during playback, which reads as a stuck script — park the
+playhead first, then make no API calls until playback stops.
+
+**Automation permission is a modal dialog you cannot script past.** The first time a
+new parent process sends keystrokes via System Events, macOS puts up *"bash" would
+like to access data from other apps* over Resolve and waits. Every keystroke until
+it is answered goes nowhere, and a capture taken during that window is silent — a
+silent capture is therefore never evidence of clean playback. Check for signal, and
+if there is none, screenshot the screen before theorising.
