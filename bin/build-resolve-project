@@ -46,6 +46,8 @@ Spec:
           - {file: DJI_0690.MP4, start: 195.0,  duration: 4.0,    at: 0.0}
           - {file: C0485.MP4,    start: 10.828, duration: 83.132, at: 4.0}
           - {file: DJI_0690.MP4, start: 250.0,  duration: 5.0,    at: 87.132}
+        markers:                    # applied to an EXISTING timeline too
+          - {at: 0.0, color: Green, name: "the take", note: "why it was chosen"}
 
     deliver:                        # optional; renders once everything is built
       dir: "~/Desktop/Renders/Faure audition"
@@ -83,6 +85,41 @@ def find_bin(mp, name):
         if f.GetName() == name:
             return f
     return mp.AddSubFolder(root, name)
+
+
+def find_timeline(project, name):
+    for i in range(1, project.GetTimelineCount() + 1):
+        tl = project.GetTimelineByIndex(i)
+        if tl and tl.GetName() == name:
+            return tl
+    return None
+
+
+def set_markers(tl, markers, fps):
+    """Put a spec's markers on a timeline, replacing any already at that frame.
+
+    What a marker is for here: saying something about a take -- which one was
+    chosen, where the picture runs out, what still needs a look -- inside the
+    timeline where the work happens, rather than in a file nobody has open. It
+    is also the only annotation Resolve's API offers that does not mean
+    rebuilding the timeline, since renaming one destroys its edits.
+
+    `at` is timeline seconds from the start; Resolve's AddMarker counts frames
+    from the start frame, not absolute frames, so the two agree without
+    involving GetStartFrame. Re-running replaces rather than stacks, because a
+    spec is meant to be applied twice.
+    """
+    for marker in markers or []:
+        frame = int(round(float(marker.get("at", 0)) * fps))
+        if frame in (tl.GetMarkers() or {}):
+            tl.DeleteMarkerAtFrame(frame)
+        ok = tl.AddMarker(frame, marker.get("color", "Blue"),
+                          marker.get("name", ""), marker.get("note", ""),
+                          int(round(float(marker.get("duration", 1)) * fps)) or 1,
+                          marker.get("data", ""))
+        state = "ok" if ok else "REFUSED"
+        print(f"  marker at {marker.get('at', 0)}s ({marker.get('color', 'Blue')}): "
+              f"{marker.get('name', '')!r}  {state}")
 
 
 def main():
@@ -176,20 +213,25 @@ def main():
     for t in spec.get("timelines", []):
         tl_bin = t.get("bin", "Timelines")
         mp.SetCurrentFolder(find_bin(mp, tl_bin))
-        if t.get("replace"):
-            for i in range(1, project.GetTimelineCount() + 1):
-                old = project.GetTimelineByIndex(i)
-                if old and old.GetName() == t["name"]:
-                    mp.DeleteTimelines([old])
-                    print(f"\nreplacing existing timeline {t['name']!r}")
-                    break
+        fps = float(project.GetSetting("timelineFrameRate"))
+        standing = find_timeline(project, t["name"])
+        if standing and t.get("replace"):
+            mp.DeleteTimelines([standing])
+            print(f"\nreplacing existing timeline {t['name']!r}")
+            standing = None
+        if standing:
+            # Rebuilding would throw away hand corrections, which is why this
+            # skips by default. Markers are set anyway: a note about a timeline
+            # is not the timeline, and having to rebuild one to annotate it
+            # would make annotating it the destructive act.
+            print(f"\ntimeline {t['name']!r} already exists, left as it is")
+            set_markers(standing, t.get("markers"), fps)
+            continue
         tl = mp.CreateEmptyTimeline(t["name"])
         if not tl:
-            print(f"\n!! could not create timeline {t['name']!r} "
-                  f"(name already used -- set 'replace: true' to rebuild it)")
+            print(f"\n!! could not create timeline {t['name']!r}")
             continue
         project.SetCurrentTimeline(tl)
-        fps = float(project.GetSetting("timelineFrameRate"))
         start_frame = int(tl.GetStartFrame())
         print(f"\ntimeline {t['name']!r} at {fps:g} fps, starts at frame {start_frame}")
 
@@ -234,6 +276,7 @@ def main():
         got = tl.GetItemListInTrack("video", 1) or []
         print(f"  -> {len(got)} video items, timeline duration "
               f"{(int(tl.GetEndFrame()) - start_frame) / fps:.3f}s")
+        set_markers(tl, t.get("markers"), fps)
 
     pm.SaveProject()
     print("\nsaved.")
