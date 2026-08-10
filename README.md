@@ -31,6 +31,8 @@ moves the same check to offload, where it costs nothing.
 
 `docs/sony-zv-e10ii-presets.md` is the camera-side half: what to set, why the US
 shutter is not 1/48, and how to register it so it survives a reset.
+`docs/camera-card.html` is the same thing with the reasoning stripped out — open it
+on a phone before you roll.
 
 Typical run, from a session folder:
 

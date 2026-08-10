@@ -1,5 +1,8 @@
 # Two presets for the ZV-E10 II: cinematic 4K, Europe and US
 
+For the shoot itself, open `camera-card.html` beside this file — same settings,
+no reasoning. This page is the why.
+
 Highest quality this body can record, set up so the only thing you decide on the
 day is which region you are in.
 

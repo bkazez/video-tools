@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ZV-E10 II — before you roll</title>
+<style>
+  /* Deliberately single-theme: read on a phone in a dim church, so it commits to
+     the dark camera-display world and paints every colour explicitly. */
+  :root {
+    --ground: #0E1417;
+    --panel: #161F23;
+    --line: #24333A;
+    --text: #E8EFF1;
+    --muted: #7C9199;
+    --eu: #8FBFAF;
+    --us: #E0A75E;
+    --alert-ground: #EDF3F2;
+    --alert-text: #0E1417;
+    --data: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+    --label: system-ui, -apple-system, "Helvetica Neue", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 0 0 3.5rem;
+    background: var(--ground); color: var(--text);
+    font-family: var(--data); font-variant-numeric: tabular-nums;
+    -webkit-text-size-adjust: 100%;
+  }
+  .wrap { max-width: 44rem; margin: 0 auto; padding: 0 1.1rem; }
+
+  h2 {
+    font-family: var(--label); font-size: 0.68rem; font-weight: 600;
+    letter-spacing: 0.2em; text-transform: uppercase; color: var(--muted);
+    margin: 2.4rem 0 1rem;
+  }
+  h2:first-of-type { margin-top: 1.8rem; }
+
+  /* The switch is what actually cost hours, so it is the loudest thing here —
+     by inversion, not by an alarm colour. */
+  .switch { background: var(--alert-ground); color: var(--alert-text); padding: 1.15rem 1.1rem 1.05rem; }
+  .switch-inner { max-width: 44rem; margin: 0 auto; display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.3rem 0.8rem; }
+  .switch b { font-size: clamp(1.5rem, 6.5vw, 2.1rem); font-weight: 700; letter-spacing: -0.02em; line-height: 1; }
+  .switch s { font-size: clamp(0.95rem, 3.6vw, 1.2rem); opacity: 0.45; text-decoration-thickness: 2px; }
+  .switch em {
+    flex-basis: 100%; font-family: var(--label); font-style: normal;
+    font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase; opacity: 0.6;
+  }
+
+  /* Numbered because the order genuinely matters: region before recall. */
+  .steps { display: grid; gap: 1.15rem; }
+  .step { display: grid; grid-template-columns: 1.9rem 1fr; gap: 0.85rem; align-items: baseline; }
+  .step i {
+    font-style: normal; font-size: 0.95rem; color: var(--muted);
+    padding-top: 0.35rem;
+  }
+  .step-do { font-size: clamp(1.15rem, 4.6vw, 1.45rem); font-weight: 500; line-height: 1.25; }
+  .step-note {
+    font-family: var(--label); font-size: 0.8rem; color: var(--muted);
+    margin-top: 0.2rem; line-height: 1.5;
+  }
+  .pair { display: flex; flex-wrap: wrap; gap: 0.4rem 1.5rem; margin-top: 0.45rem; }
+  .pair div { display: flex; align-items: baseline; gap: 0.5rem; }
+  .pair span {
+    font-family: var(--label); font-size: 0.66rem; letter-spacing: 0.16em;
+    text-transform: uppercase;
+  }
+  .pair strong { font-size: clamp(1.3rem, 5vw, 1.6rem); font-weight: 600; letter-spacing: -0.02em; }
+  .eu { color: var(--eu); }
+  .us { color: var(--us); }
+
+  .once { background: var(--panel); padding: 0.35rem 1.05rem 1.15rem; }
+  .rows { display: grid; }
+  .row {
+    display: flex; justify-content: space-between; align-items: baseline; gap: 1rem;
+    padding: 0.58rem 0; border-bottom: 1px solid var(--line);
+  }
+  .row:last-child { border-bottom: 0; }
+  .row span {
+    font-family: var(--label); font-size: 0.78rem; letter-spacing: 0.04em;
+    color: var(--muted); white-space: nowrap;
+  }
+  .row strong { font-weight: 500; font-size: clamp(0.95rem, 3.4vw, 1.1rem); text-align: right; }
+  .row strong small { font-size: 0.78em; color: var(--muted); }
+  .row.split strong { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.15rem 1.1rem; }
+  .row.split em { font-style: normal; }
+
+  .register {
+    font-family: var(--label); font-size: 0.82rem; line-height: 1.6; color: var(--muted);
+    margin: 1rem 0 0;
+  }
+  .register b { color: var(--text); font-weight: 600; }
+  .register b.eu { color: var(--eu); }
+  .register b.us { color: var(--us); }
+</style>
+</head>
+<body>
+
+<div class="switch">
+  <div class="switch-inner">
+    <b>SWITCH → MOVIE</b>
+    <s>not S&amp;Q</s>
+    <em>S&amp;Q records no audio</em>
+  </div>
+</div>
+
+<div class="wrap">
+
+  <h2>Every time, before you roll</h2>
+  <div class="steps">
+
+    <div class="step">
+      <i>1</i>
+      <div>
+        <div class="step-do">Recall Camera Set.</div>
+        <div class="pair">
+          <div class="eu"><span>Europe</span><strong>1</strong></div>
+          <div class="us"><span>US</span><strong>2</strong></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="step">
+      <i>2</i>
+      <div>
+        <div class="step-do">Glance at the shutter</div>
+        <div class="pair">
+          <div class="eu"><span>Europe</span><strong>1/50</strong></div>
+          <div class="us"><span>US</span><strong>1/60</strong></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <h2>Only if you changed country</h2>
+  <div class="steps">
+    <div class="step">
+      <i>→</i>
+      <div>
+        <div class="step-do">NTSC/PAL, then recall again</div>
+        <div class="pair">
+          <div class="eu"><span>Europe</span><strong>PAL</strong></div>
+          <div class="us"><span>US</span><strong>NTSC</strong></div>
+        </div>
+        <div class="step-note">Setup → Area/Date → NTSC/PAL Selector. It may want to format the card, so offload first.</div>
+      </div>
+    </div>
+  </div>
+
+  <h2>Set up once, then it lives in the camera</h2>
+  <div class="once">
+    <div class="rows">
+      <div class="row"><span>Exposure mode</span><strong>M</strong></div>
+      <div class="row"><span>File format</span><strong>XAVC S 4K</strong></div>
+      <div class="row"><span>Colour</span><strong>4:2:2 10-bit</strong></div>
+      <div class="row"><span>Picture profile</span><strong>S-Log3</strong></div>
+      <div class="row"><span>ISO</span><strong>800 <small>· 2500 if dark</small></strong></div>
+      <div class="row"><span>White balance</span><strong>manual K <small>· not AWB</small></strong></div>
+      <div class="row split">
+        <span>Record setting</span>
+        <strong>
+          <em class="eu">25p 140M</em>
+          <em class="us">24p 100M</em>
+        </strong>
+      </div>
+      <div class="row split">
+        <span>Shutter</span>
+        <strong>
+          <em class="eu">1/50</em>
+          <em class="us">1/60</em>
+        </strong>
+      </div>
+    </div>
+    <p class="register">
+      Set it, then <b>Shooting → Shooting Mode → Camera Set. Memory</b>:
+      save as <b class="eu">1</b> in PAL, <b class="us">2</b> in NTSC.
+      Use the in-camera slots, not M1–M4 — formatting a card erases those.
+    </p>
+  </div>
+
+</div>
+</body>
+</html>
