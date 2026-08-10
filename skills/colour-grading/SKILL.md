@@ -63,18 +63,54 @@ illuminant also cools everything that was warm because the light was warm. Leavi
 1-2% of the original bias is usually right in a warm room: the white reads white
 and the stone still reads warm.
 
+## Where skin actually is, and why the obvious mask is not it
+
+Skin is the measurement that decides a grade, so identify it carefully:
+
+- **A hue-range mask biases the very ratio you are judging.** Selecting pixels with
+  `R/G > 1.3` guarantees a median above 1.3, so the number cannot tell you the skin
+  was not that red. It happened to agree with a hand-picked patch on one session
+  (1.72 against 1.73), which is luck, not validation.
+- **"The brightest coloured pixels" is not the face in a dark interior.** The lit
+  page was brighter than his cheek, so that mask read paper and reported R/G 1.26.
+  The face sat *below* the frame's 85th percentile.
+- **Hand-pick a patch once and check the automatic mask against it.** Forehead and
+  cheek, a few hundred thousand pixels, on one frame. Then trust the mask.
+- **Measure the graded result on the same pixels as the source.** Take the mask from
+  the ungraded frame and index both with it, so nothing shifts because a threshold
+  moved.
+
+Lit skin wants 60-70% of full, and R/G about 1.29-1.40 with B/G 0.83-0.87 — the
+ColorChecker skin patches in sRGB, which is a defensible target when there is no
+chart in the shot.
+
 ## Design the curve against those numbers
 
-Interpolate a monotone curve through control points chosen from the measurement —
-where black should land, where the subject should land, where the peak should
-land — and apply it per channel, then add saturation about the luma:
+    bin/build-grade-lut --wb 0.919,1,1.009 --sat 0.94 \
+      --point 0:0 --point 8:7 --point 32:52 --point 63:128 --point 100:192 \
+      --point 170:246 --point 232:254 --point 255:255 \
+      --probe "109,63,52:cheek" --probe "119,109,108:shirt" --out grade.cube
 
-    y = 0.2126r + 0.7152g + 0.0722b
-    out = y + (rgb - y) * SAT          # SAT around 1.10-1.20
+White balance first as a per-channel gain, then one monotone curve on all three
+channels, then saturation about luma. The tool prints the slope table and what the
+grade does to each measured colour you pass as a `--probe`, which is the whole
+argument for the control points you chose.
 
-Per-channel curves add a little saturation on their own, so keep the explicit
-factor modest. Write it out as a `.cube` and verify by re-measuring the same
-frames through it.
+**Control points are channel values, not luma values.** This is the mistake to
+avoid: a point of `90:158` does not put a colour whose *luma* is 90 at 158. For
+saturated skin — R 98, G 56, B 41 — luma is dominated by green at 0.7152, so what
+sets skin's brightness is where the curve takes **56**, and its red channel rides
+the curve somewhere else entirely. A first pass designed in luma terms landed skin
+at 39% while claiming 62%. Work out the channel values of the thing you care about,
+put the control points there, and let a `--probe` confirm the luma that comes out.
+
+**The shoulder desaturates skin for free**, which is usually welcome: skin's red
+channel sits high enough to be compressed while its green is still on the steep
+part, so R/G falls. On one grade that took captured skin from R/G 1.73 to 1.28
+without any hue tool at all — with saturation only trimmed to 0.94.
+
+Keep the curve monotone (Fritsch-Carlson tangents) so it cannot ring between points
+and invert a gradient, and verify by re-measuring the same frames through it.
 
 ## Measure the noise every time, before and after — this is not optional
 
@@ -111,6 +147,14 @@ ended up darker than the source, noise back to 1.04, subject still at 154.
 
 So: shape the curve so the levels that carry only noise stay flat or fall, and
 the levels that carry the subject get the slope.
+
+**Done that way, a curve beats a gain on both counts at once.** Measured on the same
+shot: a flat 1.6x gain put lit skin at 44% and grain at 1.59x the source. A curve
+holding the shadows at slope 0.8-1.1 and spending 2.4 in the mids put skin at 65%
+*and* grain at 1.33x — brighter subject, cleaner picture, because most of a dark
+interior is background and the background is where the flat gain was wasting its
+slope. The grid shows the trade honestly: background cells fell from 2.0 to 1.6,
+subject cells rose. Prefer the version that spends slope where the subject is.
 
 ## What a curve cannot do
 
@@ -214,7 +258,7 @@ when it applies:
 
 - **If the grade is a per-channel gain** — a white balance, an exposure trim, or
   both — it is three numbers per group of clips. Write them in the session notes
-  and re-apply with `bin/resolve-set-cdl --slope "R G B"`. Text, diffable, and it
+  and re-apply with `bin/resolve-set-grade --slope "R G B"`. Text, diffable, and it
   says what it means; a 33³ cube of the same thing does not.
 - **Otherwise export a cube:**
   `TimelineItem.ExportLUT(resolve.EXPORT_LUT_33PTCUBE, path)`. Pass the

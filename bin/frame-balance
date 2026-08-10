@@ -21,10 +21,21 @@ at R = G = B, printed as an ASC CDL slope you can hand to
 Percentiles rather than fixed levels, so it reads a graded frame and an ungraded
 log conversion the same way.
 
-**When it lies:** when nothing in the frame is neutral. A shot of a red curtain
-will confidently report the curtain. Check the `%frame` column against what you
-know is in the shot, run several frames and look at the spread, and use `--region`
-to point it at something you have actually identified.
+**When it lies:** when the brightest lightly-coloured thing is not neutral. A shot
+of a red curtain will confidently report the curtain. Two cases that come up for
+real, both fixable:
+
+- **A dark interior.** The lit page or a lamp is brighter than the subject's face,
+  so the patch is paper, not skin — which is what you want here, but do not read
+  the same number as a skin measurement.
+- **A graded frame where the subject is now bright.** Skin at 65% starts passing
+  the neutrality test at the default `--sat 0.16` and drags the reading warm.
+  Tighten to `--sat 0.06` on graded frames; if the answer moves, it was catching
+  skin.
+
+Check the `%frame` column against what you know is in the shot, run several frames
+and look at the spread, and use `--region` when you want a patch you have actually
+identified.
 
 `--gain G` multiplies the printed slope by G, for folding a white balance into a
 gain that is already there rather than adding a second operator.

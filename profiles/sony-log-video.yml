@@ -1,0 +1,27 @@
+# What a Sony body must be set to before a log shoot, as checkable assertions.
+#
+#     sony-clip-info --deep --expect profiles/sony-log-video.yml /Volumes/.../C0001.MP4
+#
+# Shoot three seconds on arrival and run this against the card. Non-zero exit
+# means a setting is wrong while there is still time to change it. Copy the file
+# and edit it per rig; the keys are listed in `sony-clip-info --help`.
+
+# 10-bit 4:2:2 is the whole reason to shoot log. 8-bit log banding cannot be
+# graded out afterwards, and it is a menu setting away from correct.
+bit_depth: 10
+chroma: "422"
+
+# S&Q bakes in slow motion AND records no audio, which costs the sync reference
+# even when nothing needs slowing down. Want high frame rate? Set it as an
+# ordinary frame rate instead, which keeps the audio.
+slowmo: "no"
+audio: has_signal        # needs --deep
+
+log: "yes"               # needs --deep; confirms the picture profile is the log one
+
+# Exposure ceilings, not preferences: above these the grade starts fighting grain.
+iso: "<=3200"
+
+# 180 degrees is the convention; anything under about 90 looks staccato when
+# conformed to half the capture rate.
+shutter_angle: ">=150"

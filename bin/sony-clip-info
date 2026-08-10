@@ -28,6 +28,28 @@ Usage:
     sony-clip-info --deep Video/C0490.MP4     # also check audio and picture
     sony-clip-info --verify Video/C0490.MP4   # re-read the clock at the last
                                               # frame to confirm the factor
+
+## Checking the camera was set right, before the day is spent
+
+A camera has dozens of settings, they get changed for one shot and left, and a
+reset puts them all back to factory. Nothing on the body tells you the combination
+is wrong, and the cost lands weeks later in the edit: 8-bit log that will not take
+a grade, S&Q that records no audio and so cannot be synced.
+
+So shoot three seconds, and ask the file:
+
+    sony-clip-info --expect bit_depth=10 --expect slowmo=no /Volumes/CARD/…/C0001.MP4
+    sony-clip-info --expect camera-profile.yml Video/     # a YAML file of the same keys
+
+It exits non-zero and says which setting is wrong, per clip. Do it on arrival, on
+the actual card, before anything that matters is recorded. Checkable keys:
+
+    bit_depth   chroma      slowmo    log      audio     resolution
+    codec       capture_fps container_fps      iso       white_balance_k
+    shutter_angle
+
+Values may carry a comparison: `iso="<=6400"`, `shutter_angle=">=170"`. `audio`
+and `log` need `--deep`.
 """
 import argparse, glob, json, os, sys
 
@@ -93,10 +115,95 @@ def fmt(rec):
     return "\n".join(L)
 
 
+def bit_depth(rec):
+    pix = rec.get("pix_fmt") or ""
+    for depth in ("16", "12", "10"):
+        if depth + "le" in pix or depth + "be" in pix:
+            return int(depth)
+    return 8 if pix else None
+
+
+def chroma(rec):
+    pix = rec.get("pix_fmt") or ""
+    for layout in ("444", "422", "420"):
+        if layout in pix:
+            return layout
+    return None
+
+
+# Each key answers one question a camera can be set wrongly about.
+CHECKS = {
+    "bit_depth": bit_depth,
+    "chroma": chroma,
+    "slowmo": lambda r: "yes" if r.get("is_slowmo") else "no",
+    "log": lambda r: ("yes" if any("SL3" in x or "SLog3" in x
+                                   for x in r.get("embedded_lut") or []) else "no"),
+    "audio": lambda r: (None if r.get("audio_silent") is None
+                        else ("silent" if r["audio_silent"] else "has_signal")),
+    "resolution": lambda r: (f"{r['width']}x{r['height']}" if r.get("width") else None),
+    "codec": lambda r: r.get("codec"),
+    "capture_fps": lambda r: r.get("capture_fps"),
+    "container_fps": lambda r: r.get("container_fps"),
+    "iso": lambda r: r.get("iso"),
+    "white_balance_k": lambda r: r.get("white_balance_k"),
+    "shutter_angle": lambda r: r.get("shutter_angle_capture"),
+}
+
+
+def compare(got, want):
+    """want may be a bare value or carry <=, >=, <, > . Returns (ok, why)."""
+    text = str(want).strip()
+    for op in ("<=", ">=", "<", ">"):
+        if text.startswith(op):
+            try:
+                limit, value = float(text[len(op):]), float(got)
+            except (TypeError, ValueError):
+                return False, f"{got!r} is not a number to compare {op}{text[len(op):]}"
+            ok = {"<=": value <= limit, ">=": value >= limit,
+                  "<": value < limit, ">": value > limit}[op]
+            return ok, f"{got} vs {op}{limit:g}"
+        text_l = text
+    try:
+        ok = float(got) == float(text)
+    except (TypeError, ValueError):
+        ok = str(got).lower() == text.lower()
+    return ok, f"{got} vs {text}"
+
+
+def run_expectations(recs, expectations):
+    """Print a pass/fail line per clip. Returns the number of clips that failed."""
+    unknown = set(expectations) - set(CHECKS)
+    if unknown:
+        sys.exit("sony-clip-info: no such check(s): " + ", ".join(sorted(unknown))
+                 + "\n  known: " + ", ".join(sorted(CHECKS)))
+    failed = 0
+    for rec in recs:
+        problems, missing = [], []
+        for key, want in expectations.items():
+            got = CHECKS[key](rec)
+            if got is None:
+                missing.append(key)
+                continue
+            ok, why = compare(got, want)
+            if not ok:
+                problems.append(f"{key} {why}")
+        failed += bool(problems)
+        state = "FAIL" if problems else "ok  "
+        print(f"{state}  {rec['file']}" + (f"   {'; '.join(problems)}" if problems else ""))
+        if missing:
+            print(f"      not readable from this clip: {', '.join(missing)}"
+                  + ("  (try --deep)" if {"audio", "log"} & set(missing) else ""))
+    print(f"\n{len(recs) - failed}/{len(recs)} clip(s) match all "
+          f"{len(expectations)} expectation(s)")
+    return failed
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("paths", nargs="+", help="clips, or folders of clips")
+    ap.add_argument("--expect", action="append", default=[], metavar="KEY=VALUE|FILE.yml",
+                    help="assert a camera setting, or a YAML file of them; repeatable")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     ap.add_argument("--verify", action="store_true",
                     help="re-read the clock at the last frame to confirm the "
@@ -115,9 +222,27 @@ def main():
     if not files:
         sys.exit("no clips found")
 
+    expectations = {}
+    for item in args.expect:
+        if "=" in item:
+            key, _, value = item.partition("=")
+            expectations[key.strip()] = value.strip()
+            continue
+        if not os.path.exists(item):
+            sys.exit(f"sony-clip-info: --expect {item!r} is neither KEY=VALUE nor a file")
+        import yaml
+        with open(item) as fh:
+            loaded = yaml.safe_load(fh) or {}
+        if not isinstance(loaded, dict):
+            sys.exit(f"sony-clip-info: {item} must be a flat mapping of checks")
+        expectations.update({str(k): v for k, v in loaded.items()})
+
     recs = [describe(f, verify=args.verify, deep=args.deep) for f in files]
     if args.json:
         print(json.dumps(recs, indent=2))
+    elif expectations:
+        if run_expectations(recs, expectations):
+            sys.exit(1)
     else:
         for r in recs:
             print(fmt(r)); print()

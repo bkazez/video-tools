@@ -1,0 +1,161 @@
+#!/usr/bin/env python3
+"""Build a grade as a .cube from control points you can defend.
+
+    build-grade-lut --wb 0.919,1,1.009 \
+        --point 0:0 --point 16:13 --point 64:106 --point 90:158 --point 112:198 \
+        --point 160:238 --point 232:253 --point 255:255 \
+        --sat 0.94 --out "session grade.cube"
+
+A grade wants three things a per-channel gain cannot do at once: put the subject at
+the right level, keep the shadows from bringing their grain up with them, and stop
+the highlights short of clipping. That is a curve, and a curve is only arguable if
+its control points came from measurements — where black sits, where lit skin sits,
+where the brightest large area sits.
+
+The order is fixed and it matters:
+
+1. **White balance**, as a per-channel gain. A constant multiply in a gamma-encoded
+   space is a constant multiply in linear light, so it neutralises at every level.
+2. **One tone curve, identical on all three channels**, through the control points,
+   monotone (Fritsch-Carlson) so it cannot ring or invert between them.
+3. **Saturation** about luma, last, because the curve changes saturation on its own
+   wherever its slope is not 1 and the number you want is the one that survives it.
+
+**The slope table it prints is the point.** The local slope at a level is the noise
+gain at that level: hold it under 1 where only grain lives and the background gets
+cleaner while the subject gets brighter. Read that table before believing the grade,
+and measure the render afterwards with `frame-noise`.
+
+Apply it in Resolve with `TimelineItem.SetLUT(1, path)` after `ResetAllGrades()` on
+the node, so the LUT is the whole grade and nothing doubles up. Keep the command
+that generated it in the session notes: the arguments are the grade, and they are
+text.
+"""
+import argparse
+import sys
+
+import numpy as np
+
+LUMA = np.array([0.2126, 0.7152, 0.0722])
+
+
+def monotone_curve(points):
+    """Fritsch-Carlson monotone cubic through (in, out) points, on 0-255."""
+    xs = np.array([p[0] for p in points], float)
+    ys = np.array([p[1] for p in points], float)
+    order = np.argsort(xs)
+    xs, ys = xs[order], ys[order]
+    if len(xs) < 2:
+        sys.exit("build-grade-lut: need at least two control points")
+    if np.any(np.diff(xs) <= 0):
+        sys.exit("build-grade-lut: control points must have distinct, increasing inputs")
+    if np.any(np.diff(ys) < 0):
+        sys.exit("build-grade-lut: control points must not go downhill — that inverts the image")
+
+    h = np.diff(xs)
+    delta = np.diff(ys) / h
+    m = np.zeros_like(xs)
+    m[1:-1] = (delta[:-1] + delta[1:]) / 2
+    m[0], m[-1] = delta[0], delta[-1]
+    # Fritsch-Carlson: clamp the tangents so no segment can overshoot
+    for i in range(len(delta)):
+        if delta[i] == 0:
+            m[i] = m[i + 1] = 0
+        else:
+            a, b = m[i] / delta[i], m[i + 1] / delta[i]
+            s = a * a + b * b
+            if s > 9:
+                t = 3.0 / np.sqrt(s)
+                m[i], m[i + 1] = t * a * delta[i], t * b * delta[i]
+
+    def curve(x):
+        x = np.clip(np.asarray(x, float), xs[0], xs[-1])
+        i = np.clip(np.searchsorted(xs, x, side="right") - 1, 0, len(xs) - 2)
+        t = (x - xs[i]) / h[i]
+        t2, t3 = t * t, t * t * t
+        return ((2 * t3 - 3 * t2 + 1) * ys[i] + (t3 - 2 * t2 + t) * h[i] * m[i]
+                + (-2 * t3 + 3 * t2) * ys[i + 1] + (t3 - t2) * h[i] * m[i + 1])
+
+    return curve
+
+
+def transform(rgb, wb, curve, sat):
+    """rgb in 0-1, in the order white balance -> curve -> saturation."""
+    out = np.clip(rgb * wb, 0, 1)
+    out = np.clip(curve(out * 255.0) / 255.0, 0, 1)
+    if sat != 1.0:
+        y = out @ LUMA
+        out = np.clip(y[..., None] + (out - y[..., None]) * sat, 0, 1)
+    return out
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--point", action="append", required=True, metavar="IN:OUT",
+                    help="control point on 0-255, repeatable")
+    ap.add_argument("--wb", default="1,1,1", help="per-channel gain R,G,B applied first")
+    ap.add_argument("--sat", type=float, default=1.0, help="saturation about luma, applied last")
+    ap.add_argument("--size", type=int, default=33, choices=(17, 33, 65))
+    ap.add_argument("--title", default="grade")
+    ap.add_argument("--comment", action="append", default=[],
+                    help="line to write into the file's header, repeatable")
+    ap.add_argument("--out", required=True)
+    ap.add_argument("--probe", action="append", default=[], metavar="R,G,B:LABEL",
+                    help="report what the grade does to this measured colour, repeatable")
+    args = ap.parse_args()
+
+    points = []
+    for text in args.point:
+        try:
+            a, b = text.split(":")
+            points.append((float(a), float(b)))
+        except ValueError:
+            sys.exit(f"build-grade-lut: --point wants IN:OUT, got {text!r}")
+    wb = np.array([float(v) for v in args.wb.split(",")])
+    if len(wb) != 3:
+        sys.exit("build-grade-lut: --wb wants three numbers")
+    curve = monotone_curve(points)
+
+    size = args.size
+    axis = np.linspace(0.0, 1.0, size)
+    grid = np.stack(np.meshgrid(axis, axis, axis, indexing="ij"), -1)  # [b][g][r]
+    # .cube rows vary red fastest, so index as [b, g, r] and read channels back in order
+    rgb = grid[..., ::-1].reshape(-1, 3)
+    out = transform(rgb, wb, curve, args.sat)
+
+    with open(args.out, "w") as fh:
+        for line in args.comment:
+            fh.write(f"# {line}\n")
+        fh.write(f"# built by: build-grade-lut --wb {args.wb} --sat {args.sat} "
+                 + " ".join(f"--point {int(a)}:{int(b)}" for a, b in points) + "\n")
+        fh.write(f'TITLE "{args.title}"\n')
+        fh.write(f"LUT_3D_SIZE {size}\n\n")
+        for row in out:
+            fh.write(f"{row[0]:.6f} {row[1]:.6f} {row[2]:.6f}\n")
+
+    levels = np.array([2, 4, 8, 16, 24, 32, 48, 64, 80, 96, 112, 128, 160, 192, 224, 255], float)
+    neutral = np.repeat(levels[:, None] / 255.0, 3, axis=1)
+    mapped = transform(neutral, wb, curve, args.sat)[:, 1] * 255.0
+    slope = np.gradient(mapped, levels)
+    print(f"wrote {args.out}  ({size}^3)")
+    print("\nneutral axis, and the slope that is also the noise gain at that level:")
+    print("  in    out   slope")
+    for lv, o, s in zip(levels, mapped, slope):
+        flag = "  <- grain held down" if s < 1 else ("  <- clipped" if o > 254.5 else "")
+        print(f" {lv:4.0f}  {o:5.1f}   {s:5.2f}{flag}")
+
+    for spec in args.probe:
+        colour, _, label = spec.partition(":")
+        c = np.array([float(v) for v in colour.split(",")]) / 255.0
+        o = transform(c[None, :], wb, curve, args.sat)[0] * 255.0
+        before = c * 255.0
+        print(f"\n{label or 'probe'}: {before[0]:.0f},{before[1]:.0f},{before[2]:.0f}"
+              f"  ->  {o[0]:.1f},{o[1]:.1f},{o[2]:.1f}")
+        print(f"   luma {before @ LUMA:.1f} -> {o @ LUMA:.1f} ({o @ LUMA / 2.55:.0f}% of full)"
+              f"   R/G {before[0] / before[1]:.3f} -> {o[0] / o[1]:.3f}"
+              f"   B/G {before[2] / before[1]:.3f} -> {o[2] / o[1]:.3f}")
+
+
+if __name__ == "__main__":
+    main()

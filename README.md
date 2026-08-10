@@ -18,7 +18,12 @@ Everything takes paths as arguments; nothing is specific to one session.
 | `bin/frame-noise` | how much noise is really in the picture, per channel — the number that sets a noise-reduction threshold |
 | `bin/resolve-copy-grade` | one clip's grade (and its noise reduction) on every other timeline in the project, plus the `.cube` that survives a rebuild |
 | `bin/frame-balance` | whether the white in the shot is white, and the per-channel gain that would make it so |
-| `bin/resolve-set-cdl` | that gain applied — an ASC CDL on node 1 of selected timelines, the one grade the API can write directly |
+| `bin/build-grade-lut` | a grade as a .cube from control points: white balance, a monotone tone curve, saturation — and the slope table that says what it costs in grain |
+| `bin/resolve-set-grade` | that grade applied — a LUT and/or an ASC CDL on node 1 of selected timelines |
+
+`sony-clip-info --expect` is the pre-shoot check: assert bit depth, chroma, slow
+motion, audio, ISO and shutter against the card before the day is spent.
+`profiles/sony-log-video.yml` is a worked set of assertions to copy.
 
 Typical run, from a session folder:
 
