@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+"""Set an ASC CDL on the first node of selected timelines.
+
+    resolve-set-cdl --slope "1.410 1.606 1.705" --only Brahms --save
+    resolve-set-cdl --slope "1.475 1.606 1.621" --dry-run
+
+A per-channel gain is the whole of a white balance and most of an exposure trim,
+and it is the one grade the scripting API can write directly: the colour wheels
+are not exposed, but `TimelineItem.SetCDL()` is. `frame-balance` prints the slope
+to pass here.
+
+Two things to know before using it.
+
+**It replaces whatever primary correction the node already has.** A CDL slope does
+not stack on top of a hand-made gain in the same node — set 0.9 over a hand-set
+1.6 and the clip ends up at 0.9, not 1.44. So the slope you pass must be the
+*total* you want. There is no `AddNode` in the API and no `GetCDL`, so a second
+node is not available and the value cannot be read back.
+
+**Nothing here can verify the result.** Since the CDL cannot be read back, prove it
+by measurement: export a still with the node enabled and again with it disabled,
+and check the ratio between them is the slope you asked for. `frame-balance` on the
+graded still is the white-balance half of that check.
+
+Offset defaults to 0, power to 1 and saturation to 1, i.e. the slope alone.
+"""
+import argparse
+import os
+import sys
+
+sys.path.append("/Library/Application Support/Blackmagic Design/DaVinci Resolve/"
+                "Developer/Scripting/Modules")
+os.environ.setdefault(
+    "RESOLVE_SCRIPT_LIB",
+    "/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/Libraries/"
+    "Fusion/fusionscript.so")
+
+
+def connect():
+    try:
+        import DaVinciResolveScript as dvr
+    except ImportError:
+        sys.exit("resolve-set-cdl: Resolve's scripting module is not on the path")
+    resolve = dvr.scriptapp("Resolve")
+    if not resolve:
+        sys.exit("resolve-set-cdl: Resolve is not running")
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        sys.exit("resolve-set-cdl: no project is open")
+    return resolve, project
+
+
+def video_items(timeline):
+    items = []
+    for track in range(1, timeline.GetTrackCount("video") + 1):
+        items += timeline.GetItemListInTrack("video", track) or []
+    return items
+
+
+def triple(text, what):
+    parts = text.split()
+    if len(parts) != 3:
+        sys.exit(f"resolve-set-cdl: --{what} needs three numbers, got {text!r}")
+    return " ".join(parts)
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--slope", required=True, help='per-channel gain, e.g. "1.4 1.6 1.7"')
+    ap.add_argument("--offset", default="0 0 0")
+    ap.add_argument("--power", default="1 1 1")
+    ap.add_argument("--saturation", default="1")
+    ap.add_argument("--only", help="only timelines whose name contains this")
+    ap.add_argument("--node", type=int, default=1, help="node index (default 1)")
+    ap.add_argument("--save", action="store_true", help="save the project when done")
+    ap.add_argument("--dry-run", action="store_true")
+    args = ap.parse_args()
+
+    cdl = {"NodeIndex": str(args.node),
+           "Slope": triple(args.slope, "slope"),
+           "Offset": triple(args.offset, "offset"),
+           "Power": triple(args.power, "power"),
+           "Saturation": args.saturation}
+
+    resolve, project = connect()
+    print(f"project: {project.GetName()}")
+    print(f"CDL: {cdl}")
+
+    targets = []
+    for index in range(1, project.GetTimelineCount() + 1):
+        timeline = project.GetTimelineByIndex(index)
+        if args.only and args.only.lower() not in timeline.GetName().lower():
+            continue
+        for item in video_items(timeline):
+            targets.append((timeline, item))
+    if not targets:
+        sys.exit(f"resolve-set-cdl: no timeline matched --only {args.only!r}")
+
+    print(f"\n{len(targets)} clip(s):")
+    failed = 0
+    for timeline, item in targets:
+        if args.dry_run:
+            print(f"  would set  {timeline.GetName()}")
+            continue
+        ok = item.SetCDL(cdl)
+        failed += not ok
+        print(f"  {'set   ' if ok else 'FAILED'}  {timeline.GetName()}")
+
+    if args.dry_run:
+        print("\n--dry-run: nothing changed")
+        return
+
+    if args.save:
+        print(f"\nSaveProject: {resolve.GetProjectManager().SaveProject()}")
+    else:
+        print("\nSave the project in Resolve to keep this.")
+    print("SetCDL cannot be read back — verify by measuring a still, "
+          "node enabled against node disabled.")
+
+    if failed:
+        sys.exit(f"resolve-set-cdl: {failed} clip(s) refused the CDL")
+
+
+if __name__ == "__main__":
+    main()

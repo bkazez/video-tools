@@ -17,6 +17,8 @@ Everything takes paths as arguments; nothing is specific to one session.
 | `bin/build-resolve-project` | a whole Resolve project — bins, clip attributes, colour management, timelines — from a YAML spec |
 | `bin/frame-noise` | how much noise is really in the picture, per channel — the number that sets a noise-reduction threshold |
 | `bin/resolve-copy-grade` | one clip's grade (and its noise reduction) on every other timeline in the project, plus the `.cube` that survives a rebuild |
+| `bin/frame-balance` | whether the white in the shot is white, and the per-channel gain that would make it so |
+| `bin/resolve-set-cdl` | that gain applied — an ASC CDL on node 1 of selected timelines, the one grade the API can write directly |
 
 Typical run, from a session folder:
 
