@@ -20,7 +20,6 @@ Everything takes paths as arguments; nothing is specific to one session.
 | `bin/frame-balance` | whether the white in the shot is white, and the per-channel gain that would make it so |
 | `bin/build-grade-lut` | a grade as a .cube from control points: white balance, a monotone tone curve, saturation — and the slope table that says what it costs in grain |
 | `bin/resolve-set-grade` | that grade applied — a LUT and/or an ASC CDL on node 1 of selected timelines |
-
 | `bin/camera-card-check` | every card you insert, checked against that profile automatically, with a notification — `--install-agent` |
 
 `sony-clip-info --expect` is the pre-shoot check: assert bit depth, chroma, slow
