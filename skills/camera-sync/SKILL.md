@@ -40,6 +40,20 @@ skill); in ffmpeg, `setpts=PTS/factor`.
 all-zero PCM track is not a dead microphone, it is the clip saying it is slow
 motion. `--deep` checks.
 
+**S&Q is almost never what was wanted, and it costs the sync reference.** High frame
+rate is available as an ordinary frame rate on the same bodies, with audio; S&Q is
+the mode that bakes in the slow motion and drops the sound. Losing camera audio is
+what forces hand-alignment later, so it is worth catching on the day rather than in
+the edit:
+
+    sony-clip-info --deep --expect profiles/sony-log-video.yml CLIP.MP4
+    camera-card-check --install-agent      # or check every card at offload, hands-off
+
+The profile asserts the settings a shoot can silently be wrong about — bit depth,
+chroma, S&Q, audio present, ISO, shutter angle — and exits non-zero naming the one
+that is off. Assume a camera has been reset or left on somebody else's settings
+until a file says otherwise.
+
 ### The wall clock is what you sync with
 
 Both clocks are wrong and it does not matter: the difference between them is
