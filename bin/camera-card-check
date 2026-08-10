@@ -1,0 +1,195 @@
+#!/usr/bin/env python3
+"""Check a camera card's newest clip against the settings it should have, and say so.
+
+    camera-card-check                       # every mounted card
+    camera-card-check /Volumes/CARD1
+    camera-card-check --install-agent        # run automatically on every card insert
+    camera-card-check --clips 3 --quiet-ok
+
+The pre-shoot check only helps if it happens, and on a session there is no moment
+to pull a card, find a reader and run a tool — so this moves the check to the one
+time the card is already in the Mac: the offload. Insert a card, get a notification
+that says the settings were right, or which one was not.
+
+That is later than you want. It is still the difference between one session shot
+wrong and five, and it is the only version of this check that costs nothing on the
+day.
+
+**Silent when there is nothing to say about a volume**, so a plugged-in backup disk
+or a Resolve installer does not nag: a volume with no camera clips is skipped
+entirely.
+
+`--install-agent` writes a launchd agent that watches `/Volumes` and runs this on
+mount. Remove it with `--remove-agent`.
+
+**The mount is not ready when launchd says it is.** The agent fires on the change to
+`/Volumes`, which happens before the filesystem underneath can be listed — a first
+version reported "no camera cards mounted" on a card that was plainly there. So a
+scan that finds no clips anywhere retries until `--settle` seconds have passed, and
+returns the moment it finds any.
+"""
+import argparse
+import glob
+import json
+import os
+import plistlib
+import subprocess
+import sys
+import time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_PROFILE = os.path.join(HERE, "..", "profiles", "sony-log-video.yml")
+AGENT_LABEL = "com.bkazez.camera-card-check"
+AGENT_PATH = os.path.expanduser(f"~/Library/LaunchAgents/{AGENT_LABEL}.plist")
+LOG_PATH = os.path.expanduser("~/Library/Logs/camera-card-check.log")
+
+# launchd starts an agent with a minimal PATH that has no Homebrew in it, so
+# ffprobe is missing and the whole check dies on an import-time-looking traceback.
+# Fix it in the process rather than only in the plist, so running it any other way
+# behaves the same.
+TOOL_PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+os.environ["PATH"] = TOOL_PATH + ":" + os.environ.get("PATH", "")
+
+# Where cameras actually put clips. The last entry is the catch-all.
+CLIP_GLOBS = [
+    "PRIVATE/M4ROOT/CLIP/*.MP4",      # Sony XAVC
+    "PRIVATE/M4ROOT/CLIP/*.MXF",
+    "DCIM/*/*.MP4",                   # most stills-body video
+    "DCIM/*/*.MOV",
+    "CLIPS*/*.MP4",                   # DJI
+    "*.MP4",
+    "*/*.MP4",
+]
+
+
+def notify(title, message):
+    """A macOS notification. Best effort — never let this fail the check."""
+    script = (f'display notification {json.dumps(message)} '
+              f'with title {json.dumps(title)}')
+    try:
+        subprocess.run(["osascript", "-e", script], capture_output=True, timeout=10)
+    except Exception:
+        pass
+
+
+def candidate_volumes():
+    vols = []
+    for name in sorted(os.listdir("/Volumes")):
+        path = os.path.join("/Volumes", name)
+        if not os.path.isdir(path) or os.path.realpath(path) == "/":
+            continue
+        vols.append(path)
+    return vols
+
+
+def clips_on(volume):
+    found = []
+    for pattern in CLIP_GLOBS:
+        found += glob.glob(os.path.join(volume, pattern))
+        if found:
+            break
+    real = [f for f in found if os.path.isfile(f) and os.path.getsize(f) > 1_000_000]
+    return sorted(real, key=os.path.getmtime, reverse=True)
+
+
+def check(volume, profile, count, quiet_ok):
+    clips = clips_on(volume)
+    if not clips:
+        return None                      # not a camera card; say nothing at all
+    newest = clips[:count]
+    result = subprocess.run(
+        [os.path.join(HERE, "sony-clip-info"), "--deep", "--expect", profile, *newest],
+        capture_output=True, text=True)
+    label = os.path.basename(volume)
+    body = (result.stdout or result.stderr).strip()
+    print(f"=== {label} ({len(clips)} clip(s); checked {len(newest)})")
+    print(body or "(no output)")
+    failures = [line for line in body.splitlines() if line.startswith("FAIL")]
+    if failures:
+        first = failures[0].split(None, 2)
+        detail = first[2] if len(first) > 2 else "settings do not match"
+        notify(f"Camera card {label}: WRONG SETTINGS", detail[:220])
+    elif not quiet_ok:
+        notify(f"Camera card {label}: settings OK",
+               f"{os.path.basename(newest[0])} matches {os.path.basename(profile)}")
+    return bool(failures)
+
+
+def install_agent(profile):
+    plist = {
+        "Label": AGENT_LABEL,
+        "ProgramArguments": [os.path.join(HERE, "camera-card-check"),
+                             "--expect", os.path.abspath(profile)],
+        "WatchPaths": ["/Volumes"],
+        "StandardOutPath": LOG_PATH,
+        "StandardErrorPath": LOG_PATH,
+        "RunAtLoad": False,
+        "EnvironmentVariables": {"PATH": TOOL_PATH},
+    }
+    os.makedirs(os.path.dirname(AGENT_PATH), exist_ok=True)
+    with open(AGENT_PATH, "wb") as fh:
+        plistlib.dump(plist, fh)
+    subprocess.run(["launchctl", "unload", AGENT_PATH], capture_output=True)
+    load = subprocess.run(["launchctl", "load", AGENT_PATH], capture_output=True, text=True)
+    if load.returncode:
+        sys.exit(f"camera-card-check: launchctl load failed: {load.stderr.strip()}")
+    print(f"installed {AGENT_PATH}")
+    print(f"it watches /Volumes and logs to {LOG_PATH}")
+    print("insert a card to test it; notifications need this terminal app allowed in "
+          "System Settings > Notifications")
+
+
+def remove_agent():
+    subprocess.run(["launchctl", "unload", AGENT_PATH], capture_output=True)
+    if os.path.exists(AGENT_PATH):
+        os.remove(AGENT_PATH)
+        print(f"removed {AGENT_PATH}")
+    else:
+        print("no agent installed")
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("volumes", nargs="*", help="mount points; default every mounted volume")
+    ap.add_argument("--expect", default=DEFAULT_PROFILE,
+                    help="profile of expected settings (default profiles/sony-log-video.yml)")
+    ap.add_argument("--clips", type=int, default=1, help="how many newest clips to check")
+    ap.add_argument("--quiet-ok", action="store_true",
+                    help="only notify when something is wrong")
+    ap.add_argument("--settle", type=float, default=20.0,
+                    help="seconds to keep retrying while no volume shows clips yet "
+                         "(a mount is not readable the instant launchd fires)")
+    ap.add_argument("--install-agent", action="store_true",
+                    help="run automatically whenever a volume is mounted")
+    ap.add_argument("--remove-agent", action="store_true")
+    args = ap.parse_args()
+
+    if args.remove_agent:
+        remove_agent()
+        return
+    if args.install_agent:
+        install_agent(args.expect)
+        return
+    if not os.path.exists(args.expect):
+        sys.exit(f"camera-card-check: no profile at {args.expect}")
+
+    deadline = time.monotonic() + max(0.0, args.settle)
+    while True:
+        volumes = args.volumes or candidate_volumes()
+        if any(clips_on(v) for v in volumes) or time.monotonic() >= deadline:
+            break
+        time.sleep(2)
+
+    verdicts = [check(v, os.path.abspath(args.expect), args.clips, args.quiet_ok)
+                for v in volumes]
+    looked_at = [v for v in verdicts if v is not None]
+    if not looked_at:
+        print("no camera cards mounted")
+        return
+    if any(looked_at):
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

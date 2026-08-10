@@ -21,9 +21,13 @@ Everything takes paths as arguments; nothing is specific to one session.
 | `bin/build-grade-lut` | a grade as a .cube from control points: white balance, a monotone tone curve, saturation — and the slope table that says what it costs in grain |
 | `bin/resolve-set-grade` | that grade applied — a LUT and/or an ASC CDL on node 1 of selected timelines |
 
+| `bin/camera-card-check` | every card you insert, checked against that profile automatically, with a notification — `--install-agent` |
+
 `sony-clip-info --expect` is the pre-shoot check: assert bit depth, chroma, slow
 motion, audio, ISO and shutter against the card before the day is spent.
-`profiles/sony-log-video.yml` is a worked set of assertions to copy.
+`profiles/sony-log-video.yml` is a worked set of assertions to copy. When there is
+no time on the day, `camera-card-check --install-agent` moves the same check to
+offload, where it costs nothing.
 
 Typical run, from a session folder:
 
