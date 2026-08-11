@@ -23,6 +23,15 @@ The mechanics between beats are free, and they have to be: a pointer travelling
 to a control, a button going down, the release before a keystroke. Those are how
 a beat is *reached*. Only the arrival is on the grid.
 
+**A run of the same action accelerates through the subdivisions.** Two a beat
+apart, then two at the half, then four at the quarter, then four at the eighth:
+quarters into eighths into sixteenths into thirty-seconds. It is the one figure
+that builds energy without anything else changing, and a film that has it once
+has a shape -- a stretch of even presses at any speed reads as a list. Keep the
+run inside the grid, which is what the subdivision is for, and let it end on
+whatever the product should be left showing rather than wherever the count
+happened to stop.
+
 **Make the tool enforce it.** A rule in prose gets forgotten by the third
 revision. In `arc` the storyboard declares `"beat": 1.3` and the renderer refuses
 any title, playback, zoom or keystroke that is off the grid by more than half a

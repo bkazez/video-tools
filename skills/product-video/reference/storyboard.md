@@ -26,7 +26,7 @@ storyboard. Read those before writing a second one.
 |---|---|
 | `width`/`height` | the product's own drawing area, in points, before `chrome` |
 | `scale` | render at this multiple for a crisp master; 2 is right |
-| `beat` / `subdivide` | the grid every title, sound and keystroke lands on |
+| `beat` / `subdivide` | the grid every title, sound and keystroke lands on; 8 lets a run of keystrokes accelerate from quarters to thirty-seconds and stay in tempo |
 | `chrome` | draw the platform's window or device frame around it |
 | `vertical` | the same film redrawn in this shape, for a phone |
 | `target_lufs` | where the finished sound is aimed; -18 for a landing page |
