@@ -130,8 +130,12 @@ struct Storyboard {
             if let text = event["step"] as? String {
                 found.steps.append((text, at, at + seconds))
             }
+            // A keycap is for a key the viewer should feel their own hand press.
+            // Not every keystroke the script needs is one of those -- the ones
+            // that set something up read as noise beside the ones that are the
+            // point -- so an event can say `"keycap": false` and stay silent.
             if let step = (event["do"] as? String)?.trimmingCharacters(in: .whitespaces),
-               step.hasPrefix("key:") {
+               step.hasPrefix("key:"), event["keycap"] as? Bool ?? true {
                 found.keys.append((keycap(String(step.dropFirst(4))), at))
             }
         }

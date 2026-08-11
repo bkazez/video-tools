@@ -40,7 +40,7 @@ or hears must land on the beat; the mechanics between beats are free.
 
 | Action | Meaning |
 |---|---|
-| `"do": "STEP"` | one gesture, in the product's own script grammar |
+| `"do": "STEP"` | one gesture, in the product's own script grammar; `"keycap": false` beside it keeps a keystroke off the screen |
 | `"card": "…", "seconds": N` | a line over a dimmed frame; `"then": {"text": "…", "at": S}` adds a second line under it, laid out from the start so the first does not jump |
 | `"step": "…", "seconds": N` | a big centred title over the running picture; the numbering is part of the string |
 | `"play": {"from": S, "seconds": N, "solo": "…"}` | the product plays from second S of its own material; this is also how the film seeks |
