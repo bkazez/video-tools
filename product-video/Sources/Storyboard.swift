@@ -12,12 +12,14 @@ struct Storyboard {
     let beat: Double?
     let subdivide: Double
     let events: [[String: Any]]
+    private let board: [String: Any]
 
     init(path: String) {
         guard let data = FileManager.default.contents(atPath: path),
               let board = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
             fail("could not read the storyboard \(path)")
         }
+        self.board = board
         seconds = Storyboard.number(board["seconds"]) ?? 30
         fps = Storyboard.number(board["fps"]) ?? 30
         beat = Storyboard.number(board["beat"])
@@ -28,6 +30,48 @@ struct Storyboard {
     }
 
     static func number(_ raw: Any?) -> Double? { (raw as? NSNumber)?.doubleValue }
+
+    /// The shape of the film, in points, before the master's supersampling.
+    ///
+    /// `size` is the product's own drawing area and `canvas` is the frame the
+    /// film is cut in. They are the same thing only for a product that fills the
+    /// picture. A phone does not: it stands in a room, and the room is the rest
+    /// of the canvas.
+    struct Geometry {
+        let size: CGSize
+        let canvas: CGSize?
+        let scale: CGFloat
+        let chrome: String?
+    }
+
+    /// A phone gets the same film redrawn in the `vertical` block's shape rather
+    /// than cropped out of the wide one, so say which one you are rendering.
+    func geometry(vertical: Bool) -> Geometry {
+        let block = (vertical ? board["vertical"] as? [String: Any] : nil) ?? [:]
+        func value(_ key: String) -> Double? {
+            Storyboard.number(block[key]) ?? Storyboard.number(board[key])
+        }
+        func canvasSize() -> CGSize? {
+            guard let raw = (block["canvas"] ?? board["canvas"]) as? [String: Any],
+                  let wide = Storyboard.number(raw["width"]),
+                  let tall = Storyboard.number(raw["height"]) else { return nil }
+            return CGSize(width: wide, height: tall)
+        }
+        return Geometry(
+            size: CGSize(width: value("width") ?? 0, height: value("height") ?? 0),
+            canvas: canvasSize(),
+            scale: CGFloat(value("scale") ?? 1),
+            chrome: (block["chrome"] ?? board["chrome"]).flatMap { Storyboard.chrome($0) })
+    }
+
+    /// `chrome` was a bool while there was only one thing it could mean. It now
+    /// names which window or which bezel, and `true` still means the platform's
+    /// own window.
+    static func chrome(_ raw: Any) -> String? {
+        if let name = raw as? String { return name }
+        if let on = raw as? Bool { return on ? "macos" : nil }
+        return nil
+    }
 
     /// Every event a viewer can hear or read has to land on the beat.
     ///
@@ -46,9 +90,10 @@ struct Storyboard {
         for event in events {
             let at = Storyboard.number(event["at"]) ?? 0
             let key = (event["do"] as? String)?.trimmingCharacters(in: .whitespaces) ?? ""
+            // `scene` is a cut to somewhere else, which is as loud as a title.
             let rhythmic = event["card"] != nil || event["step"] != nil
                 || event["play"] != nil || event["zoom"] != nil || event["camera"] != nil
-                || key.hasPrefix("key:")
+                || event["scene"] != nil || key.hasPrefix("key:")
             guard rhythmic else { continue }
             let beats = (at / grid).rounded()
             if abs(at - beats * grid) > slack {
@@ -128,6 +173,17 @@ struct Timeline {
     let width: CGFloat
     let height: CGFloat
     let title: String?
+    /// The film's frame, when it is bigger than the product. A phone stands in a
+    /// room and the room is the rest of the canvas; a take stack fills its own
+    /// window and has no canvas at all.
+    let canvas: CGSize?
+    /// `"macos"`, or a device `bin/device-frame` knows. A frame source that says
+    /// nothing but gives a window title still gets the macOS bar, which is what
+    /// every one of them meant before this key existed.
+    let chrome: String?
+    /// How many pixels the frame source drew per point. Inferred from the frames
+    /// themselves where it is not said, which is what it always was.
+    let scale: CGFloat?
     let camera: [(at: Double, to: CGFloat, seconds: Double, focus: CGPoint)]
 
     init(path: String) {
@@ -140,6 +196,15 @@ struct Timeline {
         width = CGFloat(Storyboard.number(body["width"]) ?? 0)
         height = CGFloat(Storyboard.number(body["height"]) ?? 0)
         title = body["title"] as? String
+        scale = Storyboard.number(body["scale"]).map { CGFloat($0) }
+        if let raw = body["canvas"] as? [String: Any],
+           let wide = Storyboard.number(raw["width"]),
+           let tall = Storyboard.number(raw["height"]) {
+            canvas = CGSize(width: wide, height: tall)
+        } else {
+            canvas = nil
+        }
+        chrome = body["chrome"].flatMap { Storyboard.chrome($0) } ?? (title == nil ? nil : "macos")
         camera = (body["camera"] as? [[String: Any]] ?? []).map {
             (Storyboard.number($0["at"]) ?? 0,
              CGFloat(Storyboard.number($0["to"]) ?? 1),

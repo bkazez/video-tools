@@ -7,8 +7,9 @@
 # of this house has none: an .xcodeproj is a file nobody can review.
 #
 #   product-video storyboard.json --frames DIR --out film.mp4 [--audio a.wav]
-#                 [--gain-db X] [--width 1920] [--poster-at 4]
+#                 [--backdrop DIR] [--gain-db X] [--width 1920] [--poster-at 4]
 #   product-video storyboard.json --check
+#   product-video storyboard.json --layout [--vertical]
 #
 # What draws the frames is per product and lives with that product; what this
 # does is everything that is film rather than product. The contract is
@@ -41,4 +42,5 @@ if [[ ! -x "$BINARY" || "$(cat "$STAMP" 2>/dev/null)" != "$sum" ]]; then
     echo "$sum" > "$STAMP"
 fi
 
+export PRODUCT_VIDEO_HOME="$HERE"
 exec "$BINARY" "$@"

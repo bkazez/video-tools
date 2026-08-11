@@ -47,6 +47,114 @@ enum Film {
         drawn.draw(at: NSPoint(x: (canvas.width - size.width) / 2, y: bar.midY - size.height / 2))
     }
 
+    // MARK: pictures
+
+    /// A picture whose size is its pixels.
+    ///
+    /// `NSImage.size` is in points, and a PNG carrying a dpi says its points are
+    /// a third of its pixels -- which is exactly what Apple's own device bezels
+    /// do. Everything here measures in the master's pixels, so every picture is
+    /// read that way and none of them are trusted to agree about dpi.
+    static func picture(_ path: String) -> NSImage? {
+        guard let image = NSImage(contentsOfFile: path),
+              let rep = image.representations.first else { return nil }
+        image.size = NSSize(width: rep.pixelsWide, height: rep.pixelsHigh)
+        return image
+    }
+
+    // MARK: the device
+
+    /// A bezel, and where the screen sits inside it. Both come from
+    /// `bin/device-frame`, which is the one table: the still pipeline reads the
+    /// same row, so a framed screenshot and a frame of the film cannot disagree
+    /// about where the glass is.
+    struct Device {
+        let bezel: NSImage
+        let screen: NSRect          // within the bezel image, top-left origin
+        let radius: CGFloat
+        var size: NSSize { bezel.size }
+    }
+
+    /// How much of the canvas's height the bezel stands in. High enough that the
+    /// phone is the subject, low enough that what is behind it is still a room
+    /// rather than a border.
+    static let deviceFill: CGFloat = 0.88
+
+    static func device(_ name: String) -> Device {
+        guard let home = ProcessInfo.processInfo.environment["PRODUCT_VIDEO_HOME"] else {
+            fail("PRODUCT_VIDEO_HOME is unset; run this through bin/product-video")
+        }
+        let tool = "\(home)/bin/device-frame"
+        guard FileManager.default.isExecutableFile(atPath: tool) else {
+            fail("no \(tool); it is what knows where each bezel's screen hole is")
+        }
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: tool)
+        task.arguments = [name, "--json"]
+        let pipe = Pipe(), errors = Pipe()
+        task.standardOutput = pipe
+        task.standardError = errors
+        try? task.run()
+        let said = pipe.fileHandleForReading.readDataToEndOfFile()
+        let complaint = errors.fileHandleForReading.readDataToEndOfFile()
+        task.waitUntilExit()
+        guard task.terminationStatus == 0,
+              let row = (try? JSONSerialization.jsonObject(with: said)) as? [String: Any],
+              let path = row["path"] as? String, let bezel = Film.picture(path) else {
+            fail("device-frame could not give a bezel for \(name): "
+                 + (String(data: complaint, encoding: .utf8) ?? ""))
+        }
+        func at(_ key: String) -> CGFloat { CGFloat(Storyboard.number(row[key]) ?? 0) }
+        return Device(bezel: bezel,
+                      screen: NSRect(x: at("screen_x"), y: at("screen_y"),
+                                     width: at("screen_width"), height: at("screen_height")),
+                      radius: at("radius"))
+    }
+
+    /// Where the bezel stands in the canvas, and where its glass is -- the rect
+    /// the product gets drawn into. Centred, because a phone off to one side
+    /// reads as a layout and a phone in the middle reads as the subject.
+    static func stand(_ device: Device, in canvas: NSRect) -> (bezel: NSRect, screen: NSRect) {
+        let scale = canvas.height * deviceFill / device.size.height
+        let bezel = NSRect(x: canvas.midX - device.size.width * scale / 2,
+                           y: canvas.midY - device.size.height * scale / 2,
+                           width: device.size.width * scale,
+                           height: device.size.height * scale)
+        // The table gives the hole measured from the top of the bezel; a canvas
+        // counts up from the bottom.
+        let screen = NSRect(
+            x: bezel.minX + device.screen.minX * scale,
+            y: bezel.maxY - (device.screen.minY + device.screen.height) * scale,
+            width: device.screen.width * scale,
+            height: device.screen.height * scale)
+        return (bezel, screen)
+    }
+
+    /// The product on the glass, then the bezel over it. The product is clipped
+    /// to the screen's own radius first: a screenshot is a square rectangle and
+    /// a screen is not, so without the clip its corners sit in the cutout as
+    /// four dark squares behind the titanium.
+    static func drawDevice(_ device: Device, product: NSImage,
+                           bezel: NSRect, screen: NSRect) {
+        NSGraphicsContext.saveGraphicsState()
+        let radius = device.radius * bezel.height / device.size.height
+        NSBezierPath(roundedRect: screen, xRadius: radius, yRadius: radius).addClip()
+        product.draw(in: screen)
+        NSGraphicsContext.restoreGraphicsState()
+        device.bezel.draw(in: bezel)
+    }
+
+    // MARK: the room it is standing in
+
+    /// Footage of wherever the product is being used, behind it. Dimmed a
+    /// little, because a room at full brightness competes with the screen that
+    /// is the point of the film, and the screen has to win.
+    static func drawBackdrop(_ image: NSImage, in canvas: NSRect) {
+        image.draw(in: canvas)
+        NSColor.black.withAlphaComponent(0.18).setFill()
+        canvas.fill()
+    }
+
     // MARK: the camera
 
     /// The transform that magnifies the finished picture about `focus`, bringing

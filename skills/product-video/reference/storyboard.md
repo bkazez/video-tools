@@ -27,8 +27,9 @@ storyboard. Read those before writing a second one.
 | `width`/`height` | the product's own drawing area, in points, before `chrome` |
 | `scale` | render at this multiple for a crisp master; 2 is right |
 | `beat` / `subdivide` | the grid every title, sound and keystroke lands on; 8 lets a run of keystrokes accelerate from quarters to thirty-seconds and stay in tempo |
-| `chrome` | draw the platform's window or device frame around it |
-| `vertical` | the same film redrawn in this shape, for a phone |
+| `chrome` | `"macos"` for the platform's window, or a device `bin/device-frame --list` knows (`"iphone-16-pro-max"`) for a bezel. `true` still means the platform's window |
+| `canvas` | `{"width": …, "height": …}` — the film's frame, when it is bigger than the product. A phone stands in a room; the room is the rest of the canvas. Omit it and the product is the picture, which is what a window-filling product wants |
+| `vertical` | the same film redrawn in this shape, for a phone; it overrides any of the keys above |
 | `target_lufs` | where the finished sound is aimed; -18 for a landing page |
 | `poster_at` | which second becomes the still |
 
@@ -48,9 +49,37 @@ or hears must land on the beat; the mechanics between beats are free.
 | `"camera": {"to": X, "at": "WHERE", "seconds": N}` | the **picture** magnified, panning what it zooms into toward the middle |
 
 `WHERE` is the product's own way of naming a place — in arc, `lane12@114.7` is a
-take and a second, `autoedit` is a button. **Never a raw coordinate where a name
+take and a second, `autoedit` is a button; in Wavelength, `meter` and `itinerary`
+are regions the views claim for themselves. **Never a raw coordinate where a name
 exists**: a name survives a window resize and a layout change, and a coordinate
 silently aims at the wrong thing.
+
+A product may add a verb of its own for the thing its film is about — Wavelength
+has `"scene": {…}`, one stretch of film in one light, in one room, at one moment.
+Anything that changes the picture is on the beat with the words, because a cut is
+as loud as a title.
+
+## A product that stands in a room
+
+A device bezel and a canvas bigger than the product bring one more input: the
+room. `--backdrop DIR` is a PNG sequence, one frame per frame of film, drawn
+behind the device and travelling with it under the camera.
+
+They must already be the canvas's exact pixel size, and the tool refuses them
+otherwise. That is not fussiness: the same footage is what the *product* is
+looking at — Wavelength crops each backdrop frame to the glass and hands it to
+the app as the camera feed, so the phone reads as transparent — and it can only
+be the same pixels if nobody is scaling them twice.
+
+Where the device stands is the film's decision, not the product's, so it lives
+here and the product asks:
+
+    product-video storyboard.json --layout [--vertical]
+    {"canvas":{"height":1080,"width":1920},"scale":2,
+     "screen":{"height":909,"width":418,"x":751,"y":86}}
+
+in master pixels, top-left origin, ready for an ffmpeg crop. Two copies of
+"centred at 88% of the height" would drift apart on the first change.
 
 ## What a frame source has to do
 

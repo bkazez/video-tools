@@ -103,6 +103,80 @@ def dressing(tmp):
     check("the camera magnifies the picture", corner != (40, 44, 52), str(corner))
 
 
+def standing_in_a_room(tmp):
+    """A product too small to fill the picture: a bezel around it, footage behind
+    it, and the two agreeing about where the glass is."""
+    from PIL import Image
+    room = tmp / "room"
+    canvas, scale = (480, 270), 2
+    wide, tall = canvas[0] * scale, canvas[1] * scale
+
+    # The product is a flat green, the room a flat magenta. Nothing about either
+    # matters except that no pixel of one can be mistaken for the other.
+    frames = room / "frames"
+    backdrop = room / "backdrop"
+    frames.mkdir(parents=True, exist_ok=True)
+    backdrop.mkdir(parents=True, exist_ok=True)
+    for index in range(FRAMES):
+        Image.new("RGB", (220, 478), (0, 200, 0)).save(frames / f"{index:05d}.png")
+        Image.new("RGB", (wide, tall), (200, 0, 200)).save(backdrop / f"{index:05d}.png")
+    (frames / "timeline.json").write_text(json.dumps({
+        "fps": FPS, "frames": FRAMES, "width": 110, "height": 239, "scale": scale,
+        "canvas": {"width": canvas[0], "height": canvas[1]},
+        "chrome": "iphone-16-pro-max", "camera": [],
+    }))
+
+    board = storyboard(tmp, width=110, height=239, scale=scale,
+                       chrome="iphone-16-pro-max",
+                       canvas={"width": canvas[0], "height": canvas[1]})
+    out = room / "film.mp4"
+    done = run([str(board), "--frames", str(frames), "--backdrop", str(backdrop),
+                "--out", str(out), "--width", str(wide)])
+    check("a product in a room becomes a film", done.returncode == 0 and out.exists(),
+          done.stderr.strip() or "no file")
+    if not out.exists():
+        return
+
+    # The compositor is the only thing that decides where the phone stands, and
+    # it says so, so the test can look exactly there rather than hunting.
+    said = run([str(board), "--layout"])
+    places = json.loads(said.stdout)
+    glass = places["screen"]
+    check("and it says where the glass is",
+          places["canvas"] == {"width": wide, "height": tall}
+          and 0 < glass["width"] < wide and 0 < glass["height"] < tall,
+          said.stdout.strip())
+
+    picture = Image.open(sorted((frames / "dressed").glob("*.png"))[0]).convert("RGB")
+    check("the finished frame is the canvas, not the product",
+          picture.size == (wide, tall), str(picture.size))
+
+    middle = picture.getpixel((glass["x"] + glass["width"] // 2,
+                               glass["y"] + glass["height"] // 2))
+    check("the product lands inside the screen hole", middle[1] > 150 and middle[0] < 80,
+          str(middle))
+
+    # Beside the phone, at the same height: the room, dimmed but plainly itself.
+    outside = picture.getpixel((glass["x"] // 2, tall // 2))
+    check("and the room shows outside the bezel",
+          outside[0] > 80 and outside[2] > 80 and outside[1] < 80, str(outside))
+
+    # A bezel between the two: titanium is near-neutral, where the product is
+    # flat green and the room flat magenta, so a grey pixel can only be the metal.
+    edge = picture.getpixel((glass["x"] - 5, glass["y"] + glass["height"] // 2))
+    check("with a bezel between them",
+          max(edge) - min(edge) < 40 and max(edge) > 100, str(edge))
+
+    # Footage that is not the canvas's own pixels cannot be what the product was
+    # looking at, so it is refused rather than stretched.
+    Image.new("RGB", (wide // 2, tall // 2), (200, 0, 200)).save(backdrop / "00000.png")
+    done = run([str(board), "--frames", str(frames), "--backdrop", str(backdrop),
+                "--out", str(out), "--width", str(wide)])
+    check("a backdrop that is not the canvas's size fails the build",
+          done.returncode != 0 and "backdrop" in done.stderr,
+          done.stderr.strip() or "it was accepted")
+
+
 def refusing(tmp):
     """The film's own rule: what a viewer reads lands on the beat."""
     board = storyboard(tmp, events=[{"at": 0.0, "card": "on", "seconds": 0.4},
@@ -129,6 +203,7 @@ def main():
     tmp = Path(tempfile.mkdtemp(prefix="product-video-"))
     print(f"the compositor, over {FRAMES} frames of nothing in particular\n")
     dressing(tmp)
+    standing_in_a_room(tmp)
     refusing(tmp)
 
     if failures:

@@ -73,19 +73,36 @@ landing page. `skills/product-video/reference/storyboard.md` beside it is the
 file format.
 
     bin/product-video storyboard.json --frames DIR --out film.mp4 [--audio a.wav]
+                      [--backdrop DIR]
     bin/product-video storyboard.json --check
+    bin/product-video storyboard.json --layout [--vertical]
 
 `bin/product-video` is the shared half: given a product's bare frames and the
-`timeline.json` beside them, it draws the window, flies the camera, lands the
-cards and titles and keycaps, muxes the sound, and writes the mp4 and its poster.
-It has no idea what the product is, which is the point -- arc's take stack, an
-iPhone app and a web page come out looking like three films from one house.
+`timeline.json` beside them, it draws the window or the device bezel, flies the
+camera, lands the cards and titles and keycaps, muxes the sound, and writes the
+mp4 and its poster. It has no idea what the product is, which is the point --
+arc's take stack, an iPhone app and a web page come out looking like three films
+from one house.
 
 Each product writes only a **frame source**: drive itself through the storyboard,
 write `%05d.png` of itself and nothing else, and write the `timeline.json` that
 says what shape it drew, what its window is called, where each camera move was
-aiming and what it would have been playing. The worked one is `Arc --movie` in
-`~/Projects/arc`, with `bin/make-video` there tying the two halves together.
+aiming and what it would have been playing. Two are worked: `Arc --movie` in
+`~/Projects/arc` fills its own window, and `Wavelength -MOVIE_MODE` in
+`~/Projects/wavelength` stands in an iPhone bezel in a room, with `bin/make-video`
+in each tying the two halves together.
+
+A product smaller than the picture declares a `canvas` and a `chrome` device, and
+`--backdrop DIR` puts footage of the room behind it. `--layout` prints where the
+device stands and how big its glass is, in master pixels, because the frame
+source needs that rectangle too and one rule beats two.
+
+    bin/device-frame --list          # the bezels there are
+    bin/device-frame --json          # the PNG, its screen hole and corner radius
+
+`bin/device-frame` is the one table of where each device's screen sits in its
+bezel. `~/bin/frame-shot`, which frames App Store screenshots, reads the same
+row, so a still and a frame of the film cannot disagree about where the glass is.
 
 ## EDL and OTIO
 

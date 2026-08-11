@@ -1,0 +1,67 @@
+#!/bin/bash
+# device-frame -- where the bezel for a device is, and where its screen sits in it.
+#
+# One table, because two copies of "the screen hole is at (75,66)" is two chances
+# to be wrong about it. The still pipeline (frame-shot) and the film pipeline
+# (product-video) both ask this.
+#
+# The PNGs are fastlane's frameit frames, which are the ones Apple's own marketing
+# uses. Cached on first ask under ~/.cache/device-frames.
+#
+#   device-frame                      # the default device's PNG path
+#   device-frame iphone-16-pro-max    # that device's PNG path
+#   device-frame --json               # path plus the screen hole and corner radius
+#   device-frame --list               # the devices there are
+#
+set -euo pipefail
+
+CACHE="${DEVICE_FRAME_CACHE:-$HOME/.cache/device-frames}"
+DEFAULT_DEVICE=iphone-16-pro-max
+
+# device | cache file | frameit URL | screen x | y | w | h | corner radius
+#
+# The radius is the screenshot's, not the bezel's: a screenshot is a square
+# rectangle and a real screen is not, so its corners have to be rounded to the
+# screen's radius or they poke past the titanium into the frame's cutout.
+DEVICES="\
+iphone-16-pro-max|iphone16promax.png|Apple%20iPhone%2016%20Pro%20Max%20Natural%20Titanium.png|75|66|1320|2868|120"
+
+BASE_URL="https://raw.githubusercontent.com/fastlane/frameit-frames/gh-pages/latest"
+
+usage() { sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; }
+
+DEVICE=""
+FORMAT=path
+for argument in "$@"; do
+    case "$argument" in
+        -h|--help) usage; exit 0 ;;
+        --json) FORMAT=json ;;
+        --list) echo "$DEVICES" | cut -d'|' -f1; exit 0 ;;
+        -*) echo "device-frame: unknown option: $argument" >&2; exit 2 ;;
+        *) DEVICE="$argument" ;;
+    esac
+done
+[ -n "$DEVICE" ] || DEVICE="$DEFAULT_DEVICE"
+
+ROW="$(echo "$DEVICES" | grep "^$DEVICE|" || true)"
+if [ -z "$ROW" ]; then
+    echo "device-frame: no such device: $DEVICE (try --list)" >&2
+    exit 1
+fi
+IFS='|' read -r _ FILE URL_PATH SCREEN_X SCREEN_Y SCREEN_W SCREEN_H RADIUS <<< "$ROW"
+
+PNG="$CACHE/$FILE"
+if [ ! -s "$PNG" ]; then
+    mkdir -p "$CACHE"
+    # To a temporary name first: a half-downloaded PNG left at the cache path is
+    # a cache that never repairs itself.
+    curl -fsSL -o "$PNG.part" "$BASE_URL/$URL_PATH"
+    mv "$PNG.part" "$PNG"
+fi
+
+if [ "$FORMAT" = json ]; then
+    printf '{"device":"%s","path":"%s","screen_x":%s,"screen_y":%s,"screen_width":%s,"screen_height":%s,"radius":%s}\n' \
+        "$DEVICE" "$PNG" "$SCREEN_X" "$SCREEN_Y" "$SCREEN_W" "$SCREEN_H" "$RADIUS"
+else
+    echo "$PNG"
+fi

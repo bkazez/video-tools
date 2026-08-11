@@ -1,8 +1,9 @@
 // product-video -- put a product's frames into a film.
 //
 //     product-video storyboard.json --frames DIR --out film.mp4 [--audio a.wav]
-//                   [--gain-db X] [--width 1920] [--poster-at 4]
+//                   [--backdrop DIR] [--gain-db X] [--width 1920] [--poster-at 4]
 //     product-video storyboard.json --check          the storyboard alone
+//     product-video storyboard.json --layout [--vertical]   where the device goes
 //
 // The division of labour, which is the whole reason this exists:
 //
@@ -42,13 +43,64 @@ if arguments.contains("--check") {
     exit(0)
 }
 
+/// Where the product's own picture sits inside the film's frame, and what goes
+/// around it. One rule, in the half of the pipeline that owns the look -- and
+/// `--layout` prints it, because the frame source needs the same rectangle to
+/// know what the device is standing in front of, and two implementations of
+/// "centred at 88% of the height" would drift on the first change.
+func layout(canvas: CGSize?, product: CGSize, chrome: String?)
+    -> (canvas: NSRect, product: NSRect, device: (Film.Device, NSRect)?) {
+    guard let canvas else {
+        // No canvas: the product IS the picture, with a strip of window on top.
+        let bar = chrome == "macos" ? Film.barHeight : 0
+        return (NSRect(x: 0, y: 0, width: product.width, height: product.height + bar),
+                NSRect(x: 0, y: 0, width: product.width, height: product.height), nil)
+    }
+    let frame = NSRect(origin: .zero, size: canvas)
+    guard let chrome, chrome != "macos" else {
+        let bar = chrome == "macos" ? Film.barHeight : 0
+        let box = NSRect(x: frame.midX - product.width / 2,
+                         y: frame.midY - (product.height + bar) / 2,
+                         width: product.width, height: product.height)
+        return (frame, box, nil)
+    }
+    let device = Film.device(chrome)
+    let stood = Film.stand(device, in: frame)
+    return (frame, stood.screen, (device, stood.bezel))
+}
+
+if arguments.contains("--layout") {
+    let shape = storyboard.geometry(vertical: arguments.contains("--vertical"))
+    let places = layout(canvas: shape.canvas, product: shape.size, chrome: shape.chrome)
+    // In master pixels, which is what an ffmpeg crop wants.
+    func pixels(_ box: NSRect) -> [String: Int] {
+        ["x": Int((box.minX * shape.scale).rounded()),
+         // Top-left origin, because every other tool in a pipeline counts down.
+         "y": Int(((places.canvas.height - box.maxY) * shape.scale).rounded()),
+         "width": Int((box.width * shape.scale).rounded()),
+         "height": Int((box.height * shape.scale).rounded())]
+    }
+    let said: [String: Any] = [
+        "scale": shape.scale,
+        "canvas": ["width": Int((places.canvas.width * shape.scale).rounded()),
+                   "height": Int((places.canvas.height * shape.scale).rounded())],
+        "screen": pixels(places.product),
+    ]
+    let data = try! JSONSerialization.data(withJSONObject: said, options: [.sortedKeys])
+    print(String(data: data, encoding: .utf8)!)
+    exit(0)
+}
+
 guard let frames = text("--frames"), let out = text("--out") else {
     fail("--frames DIR and --out FILM.mp4 are both needed")
 }
 let timeline = Timeline(path: "\(frames)/timeline.json")
 let titles = storyboard.titles()
-let bar = timeline.title == nil ? 0 : Film.barHeight
-let canvas = NSRect(x: 0, y: 0, width: timeline.width, height: timeline.height + bar)
+let places = layout(canvas: timeline.canvas,
+                    product: CGSize(width: timeline.width, height: timeline.height),
+                    chrome: timeline.chrome)
+let canvas = places.canvas
+let backdrop = text("--backdrop")
 
 // MARK: the frames
 
@@ -78,35 +130,69 @@ func handsOver(at end: Double) -> Bool {
 for index in 0..<timeline.frames {
     let now = Double(index) / timeline.fps
     let name = String(format: "%05d.png", index)
-    guard let source = NSImage(contentsOfFile: "\(frames)/\(name)") else {
+    guard let source = Film.picture("\(frames)/\(name)") else {
         fail("no frame \(name) in \(frames)")
     }
-    let scale = source.size.width / timeline.width      // the master's resolution
+    // The master's resolution. A product that fills the picture can be measured
+    // against its own width; one standing in a room cannot, because the picture
+    // is bigger than it is, so the frame source says.
+    let scale = timeline.scale ?? (source.size.width / timeline.width)
+    var room: NSImage?
+    if let backdrop {
+        guard let picture = Film.picture("\(backdrop)/\(name)") else {
+            fail("no \(name) in \(backdrop); the room runs out before the film does")
+        }
+        guard abs(picture.size.width - canvas.width * scale) < 1.5,
+              abs(picture.size.height - canvas.height * scale) < 1.5 else {
+            fail(String(format: "the backdrop is %.0fx%.0f but the canvas is %.0fx%.0f -- "
+                        + "scale and crop it before it gets here, so what the product is "
+                        + "looking at and what is behind it are the same pixels",
+                        picture.size.width, picture.size.height,
+                        canvas.width * scale, canvas.height * scale))
+        }
+        room = picture
+    }
 
     guard let rep = NSBitmapImageRep(
         bitmapDataPlanes: nil,
         pixelsWide: Int(canvas.width * scale), pixelsHigh: Int(canvas.height * scale),
         bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-        colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
-        let context = NSGraphicsContext(bitmapImageRep: rep) else {
+        colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else {
         fail("could not make a canvas for frame \(index)")
     }
+    // Before the context, not after: the context takes its transform from the
+    // rep's point size when it is made, so a size set afterwards leaves the
+    // drawing at one pixel per point in the corner of a supersampled bitmap.
     rep.size = canvas.size
+    guard let context = NSGraphicsContext(bitmapImageRep: rep) else {
+        fail("could not make a canvas for frame \(index)")
+    }
 
     NSGraphicsContext.saveGraphicsState()
     NSGraphicsContext.current = context
 
-    // The window and the product travel together under the camera; the words do
-    // not, or they would fly off with the picture and stop being readable.
+    // The room, the window or bezel, and the product travel together under the
+    // camera; the words do not, or they would fly off with the picture and stop
+    // being readable. A camera move is aimed in the product's own coordinates,
+    // so it comes through the rectangle the product was drawn into -- which for
+    // a bare window is the whole picture and for a phone is the glass.
+    let box = places.product
     let lens = camera(at: now)
     if let lens, lens.scale > 1.0001 {
+        let focus = CGPoint(x: box.minX + lens.focus.x * box.width / timeline.width,
+                            y: box.maxY - lens.focus.y * box.height / timeline.height)
         context.saveGraphicsState()
-        Film.lens(scale: lens.scale, target: lens.target,
-                  focus: CGPoint(x: lens.focus.x, y: canvas.height - bar - lens.focus.y),
-                  in: canvas).concat()
+        Film.lens(scale: lens.scale, target: lens.target, focus: focus, in: canvas).concat()
     }
-    if let title = timeline.title { Film.drawChrome(title, in: canvas) }
-    source.draw(in: NSRect(x: 0, y: 0, width: timeline.width, height: timeline.height))
+    if let room { Film.drawBackdrop(room, in: canvas) }
+    if let title = timeline.title, timeline.chrome == "macos" {
+        Film.drawChrome(title, in: canvas)
+    }
+    if let (device, bezel) = places.device {
+        Film.drawDevice(device, product: source, bezel: bezel, screen: box)
+    } else {
+        source.draw(in: box)
+    }
     if let lens, lens.scale > 1.0001 { context.restoreGraphicsState() }
 
     for card in titles.cards where now >= card.start && now < card.end {
