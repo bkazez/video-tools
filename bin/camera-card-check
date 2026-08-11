@@ -19,14 +19,14 @@ day.
 or a Resolve installer does not nag: a volume with no camera clips is skipped
 entirely.
 
-`--install-agent` writes a launchd agent that watches `/Volumes` and runs this on
-mount. Remove it with `--remove-agent`.
+`--install-agent` writes a launchd agent that runs this once per volume mount
+(`StartOnMount`). Remove it with `--remove-agent`.
 
-**The mount is not ready when launchd says it is.** The agent fires on the change to
-`/Volumes`, which happens before the filesystem underneath can be listed — a first
-version reported "no camera cards mounted" on a card that was plainly there. So a
-scan that finds no clips anywhere retries until `--settle` seconds have passed, and
-returns the moment it finds any.
+**The mount is not ready when launchd says it is.** The agent fires as the volume
+appears, before the filesystem underneath can be listed — a first version reported
+"no camera cards mounted" on a card that was plainly there. So a scan that finds no
+clips anywhere retries until `--settle` seconds have passed, and returns the moment
+it finds any.
 """
 import argparse
 import glob
@@ -97,14 +97,26 @@ def make_visible(path):
         pass
 
 
+# A camera card is never a network share, and reaching into one costs more than the
+# time it wastes: macOS asks for network-volume access on every run, so one mounted
+# SMB share turns the check into a stream of permission dialogs.
+NETWORK_FSTYPES = {"smbfs", "nfs", "afpfs", "webdav", "ftp"}
+
+
 def candidate_volumes():
+    """Every locally mounted volume under /Volumes, network shares excluded."""
+    out = subprocess.run(["/sbin/mount"], capture_output=True, text=True).stdout
     vols = []
-    for name in sorted(os.listdir("/Volumes")):
-        path = os.path.join("/Volumes", name)
+    for line in out.splitlines():
+        _, _, rest = line.partition(" on ")
+        path, _, opts = rest.rpartition(" (")
+        fstype = opts.split(",")[0].rstrip(")").strip()
+        if os.path.dirname(path) != "/Volumes" or fstype in NETWORK_FSTYPES:
+            continue
         if not os.path.isdir(path) or os.path.realpath(path) == "/":
             continue
         vols.append(path)
-    return vols
+    return sorted(vols)
 
 
 def clips_on(volume):
@@ -146,7 +158,11 @@ def install_agent(profile):
         "Label": AGENT_LABEL,
         "ProgramArguments": [os.path.join(HERE, "camera-card-check"),
                              "--expect", os.path.abspath(profile)],
-        "WatchPaths": ["/Volumes"],
+        # StartOnMount, never WatchPaths on /Volumes. A watch fires on any change to
+        # that directory, including the attribute update this script's own retry loop
+        # causes by listing it — so the job retriggered itself every few seconds for as
+        # long as a card stayed in. StartOnMount fires once per filesystem mount.
+        "StartOnMount": True,
         "StandardOutPath": LOG_PATH,
         "StandardErrorPath": LOG_PATH,
         "RunAtLoad": False,
@@ -160,7 +176,7 @@ def install_agent(profile):
     if load.returncode:
         sys.exit(f"camera-card-check: launchctl load failed: {load.stderr.strip()}")
     print(f"installed {AGENT_PATH}")
-    print(f"it watches /Volumes and logs to {LOG_PATH}")
+    print(f"it runs once per volume mount and logs to {LOG_PATH}")
     print("insert a card to test it; notifications need this terminal app allowed in "
           "System Settings > Notifications")
 
@@ -196,11 +212,19 @@ def main():
     if args.remove_agent:
         remove_agent()
         return
-    if args.install_agent:
-        install_agent(args.expect)
-        return
+    # Checked before the install branch: an agent baked with a path to a profile that
+    # is not there fails silently at 3am on a shoot day, not now where you can see it.
     if not os.path.exists(args.expect):
         sys.exit(f"camera-card-check: no profile at {args.expect}")
+    if args.install_agent:
+        # `--install-agent` is a flag, so `--install-agent some-profile.yml` puts the
+        # profile in `volumes` and installs the default instead. Say so rather than
+        # baking the wrong expectations into an agent that then runs for months.
+        if args.volumes:
+            sys.exit("camera-card-check: --install-agent takes no volumes; name the "
+                     f"profile with --expect {args.volumes[0]}")
+        install_agent(args.expect)
+        return
 
     deadline = time.monotonic() + max(0.0, args.settle)
     while True:
