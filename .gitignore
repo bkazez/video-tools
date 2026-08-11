@@ -6,3 +6,7 @@
 .env
 venv/
 __pycache__/
+
+# The compositor is compiled on demand by bin/product-video, and a 2 MB binary
+# rebuilt on every source change is a diff nobody can read.
+product-video/.build/
