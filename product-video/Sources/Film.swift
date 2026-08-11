@@ -82,18 +82,26 @@ enum Film {
     /// A title does not fade up, it lands: opaque almost at once, and a fraction
     /// over size for a moment so it arrives with a knock. Linear fades read as
     /// hesitation, and the beat is what this kind of film is built on.
-    static func pop(_ start: Double, _ end: Double, now at: Double) -> (fade: Double, scale: Double) {
+    ///
+    /// `handingOver` is set when the next words start the instant these ones
+    /// end. Then there is no fade out at all: one set of words gives way to the
+    /// next in a single move. Fading one out and the next one in reads as two
+    /// beats where the film means one, which is most of what "too much fading"
+    /// turns out to be.
+    static func pop(_ start: Double, _ end: Double, now at: Double,
+                    handingOver: Bool = false) -> (fade: Double, scale: Double) {
         if at >= end { return (0, 1) }
         let since = at - start
-        let fade = min(1, min(since / 0.07, (end - at) / 0.22))
+        let out = handingOver ? 1 : (end - at) / 0.12
+        let fade = min(1, min(since / 0.07, out))
         let settle = min(1, since / 0.16)
         let eased = 1 - pow(1 - settle, 3)
         return (fade, 1.10 - 0.10 * eased)
     }
 
     static func drawStep(_ text: String, start: Double, end: Double, now at: Double,
-                         in bounds: NSRect) {
-        let (alpha, scale) = pop(start, end, now: at)
+                         handingOver: Bool = false, in bounds: NSRect) {
+        let (alpha, scale) = pop(start, end, now: at, handingOver: handingOver)
         guard alpha > 0.01 else { return }
         NSColor.black.withAlphaComponent(0.5 * alpha).setFill()
         bounds.fill()
@@ -101,8 +109,9 @@ enum Film {
     }
 
     static func drawCard(_ text: String, then second: (text: String, at: Double)?,
-                         start: Double, end: Double, now at: Double, in bounds: NSRect) {
-        let (alpha, scale) = pop(start, end, now: at)
+                         start: Double, end: Double, now at: Double,
+                         handingOver: Bool = false, in bounds: NSRect) {
+        let (alpha, scale) = pop(start, end, now: at, handingOver: handingOver)
         guard alpha > 0.01 else { return }
         NSColor.black.withAlphaComponent(0.85 * alpha).setFill()
         bounds.fill()
@@ -114,7 +123,7 @@ enum Film {
         // Two lines, one block: the first sits where it would sit if it were
         // alone in a block of two, and the second lands under it when its moment
         // comes -- so nothing jumps.
-        let (below, belowScale) = pop(second.at, end, now: at)
+        let (below, belowScale) = pop(second.at, end, now: at, handingOver: handingOver)
         let gap: CGFloat = 18
         let first = line(text, size: 50 * scale, alpha: alpha, in: bounds)
         let follow = line(second.text, size: 50 * belowScale,

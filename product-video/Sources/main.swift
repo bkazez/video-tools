@@ -68,6 +68,13 @@ func camera(at time: Double) -> (scale: CGFloat, target: CGFloat, focus: CGPoint
     return state
 }
 
+/// Whether the next words begin where these ones end, near enough that fading
+/// the first out would put a hole between two halves of one thought.
+func handsOver(at end: Double) -> Bool {
+    let starts = titles.cards.map { $0.start } + titles.steps.map { $0.start }
+    return starts.contains { $0 > end - 0.05 && $0 < end + 0.05 }
+}
+
 for index in 0..<timeline.frames {
     let now = Double(index) / timeline.fps
     let name = String(format: "%05d.png", index)
@@ -104,10 +111,11 @@ for index in 0..<timeline.frames {
 
     for card in titles.cards where now >= card.start && now < card.end {
         Film.drawCard(card.text, then: card.then, start: card.start, end: card.end,
-                      now: now, in: canvas)
+                      now: now, handingOver: handsOver(at: card.end), in: canvas)
     }
     for step in titles.steps where now >= step.start && now < step.end {
-        Film.drawStep(step.text, start: step.start, end: step.end, now: now, in: canvas)
+        Film.drawStep(step.text, start: step.start, end: step.end, now: now,
+                      handingOver: handsOver(at: step.end), in: canvas)
     }
     // A keycap stands for two thirds of a second and goes out over the last
     // fifth, which is about as long as a key feels pressed. It sits where a

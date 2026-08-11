@@ -29,10 +29,16 @@ if ! command -v swiftc >/dev/null 2>&1; then
     exit 1
 fi
 
-newest="$(ls -t "$SOURCES"/*.swift | head -1)"
-if [[ ! -x "$BINARY" || "$newest" -nt "$BINARY" ]]; then
+# By content, not by timestamp. `-nt` compares whole seconds on some file
+# systems, so a source edited and compiled inside the same second leaves the old
+# binary in place -- and the film comes out looking like the change was never
+# made, which is a bad hour to spend.
+STAMP="$(dirname "$BINARY")/sources.sha"
+sum="$(cat "$SOURCES"/*.swift | shasum | cut -d' ' -f1)"
+if [[ ! -x "$BINARY" || "$(cat "$STAMP" 2>/dev/null)" != "$sum" ]]; then
     mkdir -p "$(dirname "$BINARY")"
     swiftc -O -swift-version 5 -o "$BINARY" "$SOURCES"/*.swift
+    echo "$sum" > "$STAMP"
 fi
 
 exec "$BINARY" "$@"
