@@ -69,9 +69,12 @@ and `skills/davinci-resolve/SKILL.md`. Both are symlinked into `~/.claude/skills
 beats on a regular grid so it reads as music rather than as a list, three
 numbered steps with titles over the running picture, choosing the material by
 what the tool itself scores highest, and the sound and autoplay rules for a
-landing page. It carries no tools -- the film is built by whatever draws the
-product, which for `arc` is its own `bin/make-video` -- so the grid is meant to
-be enforced by that builder rather than remembered.
+landing page. `skills/product-video/reference/storyboard.md` beside it is the
+file format: one JSON storyboard per film, read by a per-product **frame source**
+and a shared **assembler**, so a second product writes the frame source and
+inherits the look. Today both halves live in `~/Projects/arc`
+(`app/Arc/Movie.swift` and `bin/make-video`); pulling the shared half in here is
+issue #1.
 
 ## EDL and OTIO
 

@@ -32,23 +32,32 @@ compiled; a heading 0.3 s late reads as a stumble that nobody can name.
 Where the film has real music under it, the beat should be **the music's own
 pulse**, not an arbitrary number. Measure it rather than guess it.
 
-## Three steps, each with a title, and no more
+## A card, then numbered steps, and nothing else on screen
 
 The shape that survives contact with a stranger:
 
-1. **A card that names the problem**, one line, on a dimmed frame. Not the
-   product, not the company: the thing the viewer already puts up with.
-2. **Three steps, numbered, each announced by a big title** over the running
+1. **A card that names the problem**, on a dimmed frame. Not the product, not the
+   company: the thing the viewer already puts up with. A second line can land
+   under the first while it is still up — the answer to it, not a replacement.
+2. **Numbered steps, each announced by a big centred title** over the running
    picture. Not captions at the foot — a caption is read *after* the thing it
    describes, and a viewer who has to work out what they just saw has stopped
    watching. A title is read before, and the action underneath keeps going.
-3. **A closing line** that is the promise, not a summary.
-
-Three is the count because a step needs about 4 s to be shown after its title is
-read, and four steps do not fit in 30 s with anything left for the last line.
+3. Three to five steps. A step needs about 4 s after its title is read.
 
 Every title is a verb phrase about what the viewer would do, not a feature name.
 "Hear any take from where you point" beats "Audition".
+
+**The words are the owner's, and they are used exactly.** When Ben writes the
+titles, they go in the film character for character, numbering included. A title
+that reads better is not licence to reword one, and the number belongs *in* the
+string rather than drawn beside it as a mark of your own — that quietly turns
+"1. Arc automatically aligns your takes" into two different things in two places.
+Add no sixth line he did not write.
+
+**Titles land, they do not fade.** Opaque in about 0.07 s, a tenth over size on
+arrival, settling over 0.16 s. A linear fade reads as hesitation, and hesitation
+is the opposite of what a film cut to a beat is doing.
 
 ## The demo has to be a real one
 
@@ -58,6 +67,10 @@ Everything below is about honesty, and each one has cost somebody a re-shoot:
   mockup and not a hand-held recording. Then a gesture the product does not have
   cannot appear in the film, and the film rebuilds itself when the product
   changes.
+- **Show the window it lives in.** A rectangle of interface with nothing around
+  it reads as a diagram; a title bar with its three lights, or a device frame,
+  reads as software somebody is using. Take the title on that bar from the
+  product's own code rather than typing one in.
 - **Choose the material by measurement.** If the film shows an edit, a join, a
   fit or a detection, pick the instance the tool itself scores highest, and say
   the number in the storyboard's comments. A demo of a mediocre example is a
@@ -96,21 +109,48 @@ second — a viewer who unmutes into silence concludes there is no audio and nev
 tries again. Aim the programme near -18 LUFS: a landing page that startles is a
 landing page people close.
 
-Where the sound is assembled from more than one source, crossfade the joins
-rather than butting them (equal-power, 20-25 ms for sustained material), and
-render each piece with enough lead-in to have something to fade through.
+**It is the product's own sound, in the order the film plays it.** Not a bed, not
+a library track: what the product would have been playing over that stretch of
+video, seeks included. A stretch ends whenever what is playing changes and
+whenever the film seeks, or one continuous piece of sound ends up under a picture
+that jumped. Where the sound is assembled from more than one stretch, crossfade
+the joins (equal-power, 20-25 ms for sustained material) and render each stretch
+with enough lead-in to have something to fade through.
+
+**A real silence stays.** If the product goes quiet while somebody sets something
+up, so does the film.
+
+## A phone gets the film redrawn, not cropped
+
+A 9:16 crop of a wide interface is a sliver of it. Redraw the same storyboard in
+a tall shape instead: same gestures, same words, same music, and the layout of
+the product does the rest. It costs nothing when every gesture aims at a name the
+product resolves rather than at a coordinate. Titles wrap and size themselves to
+the frame they are in.
 
 ## On the page
+
+The page has one job. No headline over the film — a line of type above it only
+pushes it down; keep the heading in the document for a screen reader and search
+and do not draw it. Full bleed, and no taller than the viewport minus the room
+the call to action needs, so the film and the way to sign up are on screen
+together.
 
 Browsers will not autoplay sound. So: `autoplay muted loop playsinline`, a
 poster, and one control that unmutes **where the film already is**. A control
 that restarts from the top reads as having done nothing except lose the viewer's
-place.
+place. Pick the wide or tall file with one `matchMedia` before playback starts,
+so only one of them is ever downloaded.
 
-## Worked example
+## The storyboard, and how a second product joins
 
-`~/Projects/arc` builds its landing-page film from
-`marketing/edit.json` with `bin/make-video`: the app draws every frame,
-the engine renders the audio that was playing under each stretch, and the beat
-grid, the drag-flag guard and the storyboard's gestures are all checked by the
-test suite. `docs/marketing-video.md` there is the method write-up.
+`reference/storyboard.md` in this skill is the grammar: one JSON file per film,
+read by a **frame source** that knows how to drive one product and by an
+**assembler** that turns frames and a timeline into an mp4. A new product writes
+the frame source and nothing else.
+
+`~/Projects/arc` is the worked example and the reference implementation:
+`app/Arc/Movie.swift` is its frame source, `bin/make-video` the assembler,
+`marketing/edit.json` the storyboard, `docs/marketing-video.md` the write-up, and
+`tests/test_movie.py` checks the beat grid, the refusals and every gesture in the
+shipped storyboard. Read those four before starting a second film.
