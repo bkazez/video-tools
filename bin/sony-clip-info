@@ -6,7 +6,7 @@ and that XML is where most tools expect to find the camera's own account of the
 shot. The real-time metadata track inside the file carries it too, so nothing is
 really lost.
 
-Three things this answers that ffprobe cannot:
+Four things this answers that ffprobe cannot:
 
   * **Slow motion.** In S&Q mode the camera captures at one rate and writes the
     file at another, so a clip reports a duration that is a multiple of its real
@@ -20,6 +20,11 @@ Three things this answers that ffprobe cannot:
 
   * **Wall clock.** The camera's own clock at the first frame, which is what
     lets footage be lined up against a separate audio recorder.
+
+  * **Whether anything refocused.** The lens writes its aperture, focus and zoom
+    per frame, so a rack in the middle of a long take is a fact in the file rather
+    than something to spot by eye. That is the check for a shot set up on a
+    stand-in: focus was put where it belongs and nothing moved it afterwards.
 
 Usage:
     sony-clip-info CLIP.MP4 [CLIP2.MP4 ...]
@@ -46,15 +51,26 @@ the actual card, before anything that matters is recorded. Checkable keys:
 
     bit_depth   chroma      slowmo    log      audio     resolution
     codec       capture_fps container_fps      iso       white_balance_k
-    shutter_angle
+    shutter_angle           focus     zoom     aperture
 
 Values may carry a comparison: `iso="<=6400"`, `shutter_angle=">=170"`. `audio`
 and `log` need `--deep`.
+
+`focus`, `zoom` and `aperture` are `locked` or `moved`, read from the lens's own
+per-frame metadata at both ends of the take, or at eight points with `--deep`.
 """
 import argparse, glob, json, os, sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
-from sonyrtmd import describe
+from sonyrtmd import describe, f_number
+
+LENS_LABELS = {"focus_distance_raw": "distance ", "focus_ring_raw": "ring ",
+               "zoom_35mm_raw": "35mm-equiv ", "focal_length_raw": "focal length ",
+               "zoom_ring_raw": "ring ", "iris_f_raw": ""}
+
+
+def lens_value(tag, raw):
+    return f"f/{f_number(raw)[0]:g}" if tag == "iris_f_raw" else str(raw)
 
 
 def fmt(rec):
@@ -94,6 +110,25 @@ def fmt(rec):
         a(line)
     if rec.get("white_balance_k"):
         a(f"  white balance     {rec['white_balance_k']} K")
+    for group in ("focus", "zoom", "aperture"):
+        state = (rec.get("lens") or {}).get(group)
+        if not state:
+            continue
+        # Only the aperture has a decoded unit; the rest are the lens's own
+        # encoder counts, which say "it moved" and deliberately claim nothing more.
+        held = f"held ({rec.get('lens_samples', 0)} samples identical)"
+        if group == "aperture" and rec.get("aperture"):
+            held = f"f/{rec['aperture']:g}, " + held
+            if rec.get("aperture_on_ladder") is False:
+                held += "  !! not a standard stop -- iris decode may be wrong"
+        if not state["moved"]:
+            a(f"  {group:<17} {held}")
+            continue
+        a(f"  ** {group.upper()} MOVED   {state['at']:.0f}s into the clip: "
+          + ", ".join(f"{LENS_LABELS.get(tag, tag)}{lens_value(tag, lo)}"
+                      f" -> {lens_value(tag, hi)}"
+                      for tag, (lo, hi) in sorted(state["range"].items())
+                      if lo != hi))
     if rec.get("embedded_lut"):
         a(f"  embedded LUT      {', '.join(rec['embedded_lut'])}")
         if any("SL3" in x or "SLog3" in x for x in rec["embedded_lut"]):
@@ -113,6 +148,14 @@ def fmt(rec):
     if rec.get("note"):
         a(f"  {rec['note']}")
     return "\n".join(L)
+
+
+def lens_held(group):
+    """`locked` or `moved` for one lens control, from the sampled readings."""
+    def read(rec):
+        state = (rec.get("lens") or {}).get(group)
+        return None if state is None else ("moved" if state["moved"] else "locked")
+    return read
 
 
 def bit_depth(rec):
@@ -147,6 +190,9 @@ CHECKS = {
     "iso": lambda r: r.get("iso"),
     "white_balance_k": lambda r: r.get("white_balance_k"),
     "shutter_angle": lambda r: r.get("shutter_angle_capture"),
+    "focus": lens_held("focus"),
+    "zoom": lens_held("zoom"),
+    "aperture": lens_held("aperture"),
 }
 
 

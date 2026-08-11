@@ -65,7 +65,7 @@ def camera_clips(d):
     for ext in ("MP4", "mp4", "MXF", "mxf"):
         files += glob.glob(os.path.join(d, f"*.{ext}"))
     for f in sorted(set(files)):
-        rec = describe(f)
+        rec = describe(f, lens=False)   # only the clock matters here
         if not rec.get("clock"):
             continue
         start = datetime.datetime.strptime(rec["clock"], "%Y-%m-%d %H:%M:%S")

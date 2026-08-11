@@ -32,3 +32,10 @@ log: "yes"            # S-Log3; set to "no" if the preset uses S-Cinetone instea
 # 2500 is cleaner than 1600. Above 2500 the grade starts fighting grain — a FAIL
 # here in a genuinely dark room is information, not an error.
 iso: "<=2500"
+
+# Focus is set on a stand-in before the take and must not move once the performer
+# is the one in frame — nobody is behind the camera to catch a rack. The camera
+# setup that makes this true is Manual Focus with AF On on a held button; this is
+# the reading that proves it happened. Zoom and aperture are reported by
+# `sony-clip-info` and deliberately not asserted: both are legitimate mid-take.
+focus: locked

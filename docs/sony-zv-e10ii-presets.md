@@ -40,6 +40,7 @@ bodies commonly want to format the card when this changes — offload first.
 | ISO | 800, or 2500 in low light | 800, or 2500 in low light |
 | Picture Profile | S-Log3 / S-Gamut3.Cine | S-Log3 / S-Gamut3.Cine |
 | White balance | manual Kelvin | manual Kelvin |
+| Focus Mode | Manual Focus, AF on a held button | Manual Focus, AF on a held button |
 
 Record Setting bit rates and depths are from Sony's
 [Movie Settings table](https://helpguide.sony.net/ilc/2430/v1/en/contents/0412B_movie_setting.html):
@@ -91,6 +92,74 @@ that varies by body.
   cover a whole session.
 - **Record audio even though the real audio is on the recorder.** It is the sync
   reference. Losing it is what cost hours on 2026-04-07.
+
+## Step 3b: focus, for a shot you are not standing behind
+
+The problem is specific: a stand-in holds the position, focus is set on them, and
+then the person in frame is the one who cannot see the screen. Nothing may pull
+focus for the next twenty minutes.
+
+**Movie mode gives no focus mode that does this.** Only Continuous AF and Manual
+Focus are offered while the switch is on Movie
+([Focus Mode](https://helpguide.sony.net/ilc/2430/v1/en/contents/0405C_focus_mode.html)) —
+there is no AF-S to acquire once and stop. Continuous AF with the transition speed
+slowed still refocuses; it only takes longer about it.
+
+**So the resting state is Manual Focus, and AF is a button.** This body will
+autofocus out of MF, but only for movie:
+
+> When shooting a movie, you can perform auto-focusing by holding down the custom
+> key to which [AF On] is assigned even in the manual focusing mode.
+> — [AF On](https://helpguide.sony.net/ilc/2430/v1/en/contents/0405_af_on.html)
+
+That is the whole answer. In MF there is no mechanism that can refocus, and the
+button is the only thing that ever moves it.
+
+    MENU -> Focus -> AF/MF -> Focus Mode -> Manual Focus
+    MENU -> Setup -> Operation Customize -> Custom Key/Dial Set. -> C1 -> AF On
+    MENU -> Setup -> Operation Customize -> Custom Key/Dial Set. -> centre -> Focus Magnifier
+
+Custom keys are held **separately per shooting mode**, so the movie assignment has
+to be made with the switch on Movie
+([Custom Key/Dial Set.](https://helpguide.sony.net/ilc/2430/v1/en/contents/0413M_custom_key.html)).
+Focus Magnifier works in MF and during movie recording
+([Focus Magnifier](https://helpguide.sony.net/ilc/2430/v1/en/contents/0405_focus_magni.html)),
+which is what the check on the stand-in uses. Turn **Peaking Display** on beside it.
+
+Three things then have to be off, because each one exists to move focus:
+
+- **Product Showcase Set** — pulls focus to whatever is held toward the lens.
+- **Touch operation** — a touch on the screen starts tracking, and the screen gets
+  touched while a camera is being positioned.
+- **The lens's own AF/MF switch, if it has one, stays on AF.** The lens overrides
+  the body, and MF on the lens takes AF On down with it
+  ([AF/MF Selector](https://helpguide.sony.net/ilc/2430/v1/en/contents/0405_af_mf_control.html)).
+
+On the day: frame, **then** focus. Hold C1 until it settles on the stand-in,
+release, press the centre button and magnify to confirm. Re-do it after any power
+cycle, since a power zoom retracts when the body powers off and does not come back
+where it was.
+
+**Zoom is what breaks this, not focus.** On 2026-04-07 every clip whose zoom ring
+moved also moved focus — C0488, C0491, C0496 and C0497, measured from their own
+lens metadata (`sony-clip-info --deep`). The kit power zoom is not parfocal, so
+reframing by zoom after focusing throws away the focus.
+
+## Step 3c: prove it, from the clip
+
+The lens writes its aperture, focus and zoom into the clip's metadata track every
+frame, so "nothing refocused" is a reading rather than a memory:
+
+    sony-clip-info --deep Video/C0489.MP4
+
+    aperture          f/3.2, held (8 samples identical)
+    focus             held (8 samples identical)
+
+`focus: locked` is asserted by both cinematic profiles, so the check that runs on
+every card insert already covers it. Across the 16 clips of 2026-04-07 it holds ten
+and fails six; C0492 racked focus 109 s in with the zoom untouched, and C0498
+changed aperture from f/3.2 to f/5.6 mid-take. Zoom and aperture are reported and
+not asserted — a zoom mid-take is a choice, not a fault.
 
 ## Step 4: register each preset in the camera
 

@@ -11,7 +11,7 @@ Everything takes paths as arguments; nothing is specific to one session.
 
 | Tool | Answers |
 |---|---|
-| `bin/sony-clip-info` | what the camera recorded: model, capture frame rate, shutter, ISO, white balance, embedded LUT, wall clock, **slow-motion factor**, silent audio |
+| `bin/sony-clip-info` | what the camera recorded: model, capture frame rate, shutter, ISO, white balance, embedded LUT, wall clock, **slow-motion factor**, silent audio, and **whether focus, zoom or aperture moved mid-take** |
 | `bin/camera-session-sync` | the clock offset between a camera and an audio recorder, and which clip covers which take |
 | `bin/motion-sync` | the last second of alignment, by correlating picture motion against audio onsets |
 | `bin/build-resolve-project` | a whole Resolve project — bins, clip attributes, colour management, timelines — from a YAML spec |
@@ -24,14 +24,16 @@ Everything takes paths as arguments; nothing is specific to one session.
 | `bin/camera-card-check` | every card you insert, checked against that profile automatically, with a notification — `--install-agent` |
 
 `sony-clip-info --expect` is the pre-shoot check: assert bit depth, chroma, slow
-motion, audio, ISO and shutter against the card before the day is spent.
+motion, audio, ISO, shutter and `focus: locked` against the card before the day is
+spent.
 `profiles/` holds worked sets of assertions to copy: `sony-log-video.yml`, and
 `sony-4k-cinematic-pal.yml` / `sony-4k-cinematic-ntsc.yml` for 50 Hz and 60 Hz
 regions. When there is no time on the day, `camera-card-check --install-agent`
 moves the same check to offload, where it costs nothing.
 
 `docs/sony-zv-e10ii-presets.md` is the camera-side half: what to set, why the US
-shutter is not 1/48, and how to register it so it survives a reset.
+shutter is not 1/48, why focus is a held button rather than a focus mode, and how
+to register it so it survives a reset.
 `docs/camera-card.html` is the same thing with the reasoning stripped out — open it
 on a phone before you roll.
 
