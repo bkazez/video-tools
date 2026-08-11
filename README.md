@@ -70,11 +70,22 @@ beats on a regular grid so it reads as music rather than as a list, three
 numbered steps with titles over the running picture, choosing the material by
 what the tool itself scores highest, and the sound and autoplay rules for a
 landing page. `skills/product-video/reference/storyboard.md` beside it is the
-file format: one JSON storyboard per film, read by a per-product **frame source**
-and a shared **assembler**, so a second product writes the frame source and
-inherits the look. Today both halves live in `~/Projects/arc`
-(`app/Arc/Movie.swift` and `bin/make-video`); pulling the shared half in here is
-issue #1.
+file format.
+
+    bin/product-video storyboard.json --frames DIR --out film.mp4 [--audio a.wav]
+    bin/product-video storyboard.json --check
+
+`bin/product-video` is the shared half: given a product's bare frames and the
+`timeline.json` beside them, it draws the window, flies the camera, lands the
+cards and titles and keycaps, muxes the sound, and writes the mp4 and its poster.
+It has no idea what the product is, which is the point -- arc's take stack, an
+iPhone app and a web page come out looking like three films from one house.
+
+Each product writes only a **frame source**: drive itself through the storyboard,
+write `%05d.png` of itself and nothing else, and write the `timeline.json` that
+says what shape it drew, what its window is called, where each camera move was
+aiming and what it would have been playing. The worked one is `Arc --movie` in
+`~/Projects/arc`, with `bin/make-video` there tying the two halves together.
 
 ## EDL and OTIO
 

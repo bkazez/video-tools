@@ -145,9 +145,11 @@ so only one of them is ever downloaded.
 ## The storyboard, and how a second product joins
 
 `reference/storyboard.md` in this skill is the grammar: one JSON file per film,
-read by a **frame source** that knows how to drive one product and by an
-**assembler** that turns frames and a timeline into an mp4. A new product writes
-the frame source and nothing else.
+read by a **frame source** that knows how to drive one product and by
+`bin/product-video` here, which turns frames and a timeline into a film. A new
+product writes the frame source and nothing else -- the window, the camera, the
+words, the sound and the poster are already written and are the same for every
+product, which is what makes them look like one house.
 
 `~/Projects/arc` is the worked example and the reference implementation:
 `app/Arc/Movie.swift` is its frame source, `bin/make-video` the assembler,

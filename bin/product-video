@@ -1,0 +1,38 @@
+#!/bin/bash
+# product-video -- put a product's frames into a film: window, camera, titles,
+# sound, poster.
+#
+# Compiles the Swift beside it on first use and whenever a source is newer, then
+# runs it. One swiftc invocation, no Xcode project, for the same reason the rest
+# of this house has none: an .xcodeproj is a file nobody can review.
+#
+#   product-video storyboard.json --frames DIR --out film.mp4 [--audio a.wav]
+#                 [--gain-db X] [--width 1920] [--poster-at 4]
+#   product-video storyboard.json --check
+#
+# What draws the frames is per product and lives with that product; what this
+# does is everything that is film rather than product. The contract is
+# skills/product-video/reference/storyboard.md.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SOURCES="$HERE/product-video/Sources"
+BINARY="$HERE/product-video/.build/product-video"
+
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+    sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
+    exit 0
+fi
+
+if ! command -v swiftc >/dev/null 2>&1; then
+    echo "product-video: needs swiftc (macOS); the compositor is AppKit" >&2
+    exit 1
+fi
+
+newest="$(ls -t "$SOURCES"/*.swift | head -1)"
+if [[ ! -x "$BINARY" || "$newest" -nt "$BINARY" ]]; then
+    mkdir -p "$(dirname "$BINARY")"
+    swiftc -O -swift-version 5 -o "$BINARY" "$SOURCES"/*.swift
+fi
+
+exec "$BINARY" "$@"
