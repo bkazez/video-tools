@@ -63,6 +63,16 @@ pressed record.
 Depth, and the traps worth reading before starting: `skills/camera-sync/SKILL.md`
 and `skills/davinci-resolve/SKILL.md`. Both are symlinked into `~/.claude/skills/`.
 
+## Cutting a short product film
+
+`skills/product-video/SKILL.md` is the method for a 30 second demo or teaser:
+beats on a regular grid so it reads as music rather than as a list, three
+numbered steps with titles over the running picture, choosing the material by
+what the tool itself scores highest, and the sound and autoplay rules for a
+landing page. It carries no tools -- the film is built by whatever draws the
+product, which for `arc` is its own `bin/make-video` -- so the grid is meant to
+be enforced by that builder rather than remembered.
+
 ## EDL and OTIO
 
 Older converters, unchanged:
