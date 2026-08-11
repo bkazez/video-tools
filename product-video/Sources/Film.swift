@@ -75,10 +75,13 @@ enum Film {
         var size: NSSize { bezel.size }
     }
 
-    /// How much of the canvas's height the bezel stands in. High enough that the
-    /// phone is the subject, low enough that what is behind it is still a room
-    /// rather than a border.
-    static let deviceFill: CGFloat = 0.88
+    /// How much of the canvas's height the bezel stands in.
+    ///
+    /// High enough that the phone is the subject, low enough that a band of room
+    /// is left above and below it -- because a device's whole screen is usually
+    /// words, and a title centred over the middle of the frame would land on top
+    /// of them. The room is where the film's own words go.
+    static let deviceFill: CGFloat = 0.72
 
     static func device(_ name: String) -> Device {
         guard let home = ProcessInfo.processInfo.environment["PRODUCT_VIDEO_HOME"] else {
@@ -181,10 +184,54 @@ enum Film {
 
     // MARK: the words
 
+    /// Where the product is, when a title has to stay off it. A product that
+    /// fills the picture leaves this nothing and the words go in the middle, as
+    /// they always have.
+    static var keepClear: NSRect?
+
     /// Titles are centred, and the keys pressed after one appear in the same
     /// place, so a viewer's eye never leaves the middle of the frame.
+    ///
+    /// Unless the middle of the frame is a screen with words on it. Then the
+    /// title takes the taller of the two bands the product leaves free, because
+    /// two sentences in one place are worse than either alone -- and the eye
+    /// still has somewhere settled to be, since every title in a film picks the
+    /// same band.
     static func titleBaseline(in bounds: NSRect, height: CGFloat) -> CGFloat {
-        (bounds.height - height) / 2
+        guard let band = clearBand(in: bounds, height: height) else {
+            return (bounds.height - height) / 2
+        }
+        return band.midY - height / 2
+    }
+
+    /// The band a title stands in, or nothing if the product leaves no room for
+    /// one and the words have to go over it after all.
+    static func clearBand(in bounds: NSRect, height: CGFloat) -> NSRect? {
+        guard let product = keepClear else { return nil }
+        let below = NSRect(x: 0, y: 0, width: bounds.width, height: max(product.minY, 0))
+        let above = NSRect(x: 0, y: product.maxY, width: bounds.width,
+                           height: max(bounds.height - product.maxY, 0))
+        let roomier = below.height >= above.height ? below : above
+        return roomier.height >= height + 24 ? roomier : nil
+    }
+
+    /// The dark the words are read against.
+    ///
+    /// Over the whole frame when the words are over the whole frame. When they
+    /// have a band of their own, only that band, fading out towards the product
+    /// so there is no edge -- a film about light should not black out the room
+    /// it is measuring every time it says something.
+    static func scrim(_ alpha: Double, over bounds: NSRect, height: CGFloat) {
+        guard let band = clearBand(in: bounds, height: height) else {
+            NSColor.black.withAlphaComponent(alpha).setFill()
+            bounds.fill()
+            return
+        }
+        let solid = NSColor.black.withAlphaComponent(alpha)
+        let gone = NSColor.black.withAlphaComponent(0)
+        let atBottom = band.minY < bounds.midY
+        NSGradient(starting: atBottom ? solid : gone, ending: atBottom ? gone : solid)?
+            .draw(in: band, angle: 90)
     }
 
     /// A title does not fade up, it lands: opaque almost at once, and a fraction
@@ -211,9 +258,10 @@ enum Film {
                          handingOver: Bool = false, in bounds: NSRect) {
         let (alpha, scale) = pop(start, end, now: at, handingOver: handingOver)
         guard alpha > 0.01 else { return }
-        NSColor.black.withAlphaComponent(0.5 * alpha).setFill()
-        bounds.fill()
-        draw(text, size: 52 * scale, alpha: alpha, in: bounds)
+        let drawn = line(text, size: 52 * scale, alpha: alpha, in: bounds)
+        scrim(0.5 * alpha, over: bounds, height: drawn.height)
+        place(drawn.text, in: bounds,
+              top: titleBaseline(in: bounds, height: drawn.height) + drawn.height)
     }
 
     static func drawCard(_ text: String, then second: (text: String, at: Double)?,
@@ -223,6 +271,12 @@ enum Film {
         guard alpha > 0.01 else { return }
         NSColor.black.withAlphaComponent(0.85 * alpha).setFill()
         bounds.fill()
+        // A card takes the whole frame down to almost nothing, so there is
+        // nothing left to read behind it and nothing to stay clear of. It goes
+        // in the middle, where a film opens.
+        let product = keepClear
+        keepClear = nil
+        defer { keepClear = product }
 
         guard let second else {
             draw(text, size: 50 * scale, alpha: alpha, in: bounds)

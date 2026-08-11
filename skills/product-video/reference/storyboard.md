@@ -76,10 +76,10 @@ here and the product asks:
 
     product-video storyboard.json --layout [--vertical]
     {"canvas":{"height":1080,"width":1920},"scale":2,
-     "screen":{"height":909,"width":418,"x":751,"y":86}}
+     "screen":{"height":743,"width":342,"x":789,"y":168}}
 
 in master pixels, top-left origin, ready for an ffmpeg crop. Two copies of
-"centred at 88% of the height" would drift apart on the first change.
+"centred at 72% of the height" would drift apart on the first change.
 
 ## What a frame source has to do
 

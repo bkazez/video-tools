@@ -101,6 +101,11 @@ let places = layout(canvas: timeline.canvas,
                     chrome: timeline.chrome)
 let canvas = places.canvas
 let backdrop = text("--backdrop")
+// Where the words must not land. A product that fills the picture leaves this
+// nothing and the titles go over the middle as they always have; one standing in
+// a room is usually a screen full of words, and a title on top of them is two
+// sentences in one place.
+Film.keepClear = places.device == nil ? nil : places.product
 
 // MARK: the frames
 

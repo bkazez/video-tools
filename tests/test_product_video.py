@@ -163,9 +163,12 @@ def standing_in_a_room(tmp):
 
     # A bezel between the two: titanium is near-neutral, where the product is
     # flat green and the room flat magenta, so a grey pixel can only be the metal.
-    edge = picture.getpixel((glass["x"] - 5, glass["y"] + glass["height"] // 2))
+    # Scanned rather than sampled at one offset, because how thick the rail is
+    # depends on how big the phone is in the canvas.
+    rail = [picture.getpixel((glass["x"] - step, glass["y"] + glass["height"] // 2))
+            for step in range(1, 12)]
     check("with a bezel between them",
-          max(edge) - min(edge) < 40 and max(edge) > 100, str(edge))
+          any(max(p) - min(p) < 40 and max(p) > 90 for p in rail), str(rail))
 
     # Footage that is not the canvas's own pixels cannot be what the product was
     # looking at, so it is refused rather than stretched.
