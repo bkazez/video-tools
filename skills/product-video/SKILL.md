@@ -68,6 +68,15 @@ Everything below is about honesty, and each one has cost somebody a re-shoot:
 - **Never speed up or trim the middle of an action.** If it is too slow to show
   in real time, that is a finding about the product.
 
+## Two zooms, not one
+
+Zooming the *content* (a timeline's scale, a map's level) shows more or less of
+it. It cannot make a detail drawn in pixels -- a 15 ms crossfade, a button in a
+corner -- big enough to look at. That needs a **camera**: magnify the finished
+picture, move what you are zooming into toward the middle as you go, and clamp
+the move so the frame never shows what is outside the window. Keep the titles out
+of the camera or they scale with it and stop being readable.
+
 ## Two things to check by eye every time
 
 No assertion covers taste, and these are the two failures that survive a green
