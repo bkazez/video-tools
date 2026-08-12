@@ -260,7 +260,7 @@ enum Film {
         guard alpha > 0.01 else { return }
         let drawn = line(text, size: 52 * scale, alpha: alpha, in: bounds)
         scrim(0.5 * alpha, over: bounds, height: drawn.height)
-        place(drawn.text, in: bounds,
+        place(drawn.text, width: drawn.width, in: bounds,
               top: titleBaseline(in: bounds, height: drawn.height) + drawn.height)
     }
 
@@ -292,8 +292,10 @@ enum Film {
                           alpha: at >= second.at ? below : 0, in: bounds)
         let total = first.height + gap + follow.height
         let top = titleBaseline(in: bounds, height: total) + total
-        place(first.text, in: bounds, top: top)
-        if at >= second.at { place(follow.text, in: bounds, top: top - first.height - gap) }
+        place(first.text, width: first.width, in: bounds, top: top)
+        if at >= second.at {
+            place(follow.text, width: follow.width, in: bounds, top: top - first.height - gap)
+        }
     }
 
     /// `under` pushes the cap below a title that is still on screen. They share
@@ -319,10 +321,17 @@ enum Film {
         drawn.draw(at: NSPoint(x: box.midX - size.width / 2, y: box.midY - size.height / 2))
     }
 
-    /// One line, measured but not drawn: what a block of two needs to lay itself
-    /// out before either of them appears.
-    private static func line(_ text: String, size: CGFloat, alpha: Double,
-                             in bounds: NSRect) -> (text: NSAttributedString, height: CGFloat) {
+    /// A block of centred words, measured but not drawn -- and measured at the
+    /// width that balances it rather than the width it is allowed.
+    ///
+    /// Greedy wrapping fills each line to the margin and leaves whatever is left
+    /// alone on the last one, so a title reads as a long line and a stub. On
+    /// centred type that lands as a lopsided wedge, and it is the single thing
+    /// that most makes a title look unset. The fix costs nothing: the narrowest
+    /// width that still wraps to the same number of lines is, by construction,
+    /// the one where every line is as full as the others.
+    private static func line(_ text: String, size: CGFloat, alpha: Double, in bounds: NSRect)
+        -> (text: NSAttributedString, height: CGFloat, width: CGFloat) {
         let paragraph = NSMutableParagraphStyle()
         paragraph.alignment = .center
         paragraph.lineHeightMultiple = 1.08
@@ -331,18 +340,31 @@ enum Film {
             .foregroundColor: NSColor.white.withAlphaComponent(0.97 * alpha),
             .paragraphStyle: paragraph,
         ])
-        let width = bounds.width - 2 * max(bounds.width * 0.06, 28)
-        let box = drawn.boundingRect(with: NSSize(width: width, height: .greatestFiniteMagnitude),
-                                     options: [.usesLineFragmentOrigin, .usesFontLeading])
-        return (drawn, box.height)
+        let full = bounds.width - 2 * margin(in: bounds)
+        let height = { (width: CGFloat) in
+            drawn.boundingRect(with: NSSize(width: width, height: .greatestFiniteMagnitude),
+                               options: [.usesLineFragmentOrigin, .usesFontLeading]).height
+        }
+        let tall = height(full)
+
+        // Binary search, because measuring is the only way to ask this question
+        // and a dozen measurements is nothing beside drawing the frame.
+        var narrow = full / 4, wide = full
+        while wide - narrow > 1 {
+            let middle = (narrow + wide) / 2
+            if height(middle) <= tall + 0.5 { wide = middle } else { narrow = middle }
+        }
+        return (drawn, tall, wide)
     }
 
-    private static func place(_ text: NSAttributedString, in bounds: NSRect, top: CGFloat) {
-        let margin = max(bounds.width * 0.06, 28)
-        let width = bounds.width - 2 * margin
+    private static func margin(in bounds: NSRect) -> CGFloat { max(bounds.width * 0.06, 28) }
+
+    private static func place(_ text: NSAttributedString, width: CGFloat,
+                              in bounds: NSRect, top: CGFloat) {
         let box = text.boundingRect(with: NSSize(width: width, height: .greatestFiniteMagnitude),
                                     options: [.usesLineFragmentOrigin, .usesFontLeading])
-        text.draw(with: NSRect(x: margin, y: top - box.height, width: width, height: box.height),
+        text.draw(with: NSRect(x: (bounds.width - width) / 2, y: top - box.height,
+                               width: width, height: box.height),
                   options: [.usesLineFragmentOrigin, .usesFontLeading])
     }
 
@@ -352,7 +374,7 @@ enum Film {
     /// wraps rather than being cropped.
     private static func draw(_ text: String, size: CGFloat, alpha: Double, in bounds: NSRect) {
         let drawn = line(text, size: size, alpha: alpha, in: bounds)
-        place(drawn.text, in: bounds,
+        place(drawn.text, width: drawn.width, in: bounds,
               top: titleBaseline(in: bounds, height: drawn.height) + drawn.height)
     }
 }
