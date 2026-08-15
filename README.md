@@ -35,7 +35,9 @@ moves the same check to offload, where it costs nothing.
 shutter is not 1/48, why focus is a held button rather than a focus mode, and how
 to register it so it survives a reset.
 `docs/camera-card.html` is the same thing with the reasoning stripped out — open it
-on a phone before you roll.
+on a phone before you roll. `docs/focus-card.pdf` is the focus setup alone as a 3×5
+index card to print and keep in the bag; edit `docs/focus-card.html` and re-render
+it with `bin/html-to-pdf docs/focus-card.html`.
 
 Typical run, from a session folder:
 
