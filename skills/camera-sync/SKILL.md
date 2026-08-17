@@ -151,6 +151,79 @@ A one-second error is glaring under this and invisible under any amount of
 arithmetic. It is also sharp enough to choose between two candidate offsets
 directly — put them side by side and one of them will fail on a rest.
 
+**It is also slow, and on 2024-05-21 Laurens Leuven it PASSED at an offset that
+was 9.4 s wrong** — four sung frames with the mouth open, four silent frames with
+it shut, on a placement showing a different moment of the same take. Eight frames
+is not eight observations when the singer is phonating most of the time. Treat it
+as a last resort and a coarse one, never as the thing that settles a number, and
+prefer the disagreement test below, which costs seconds and cannot be flattered.
+
+## Never seek with `ffmpeg -ss` when the answer is a time
+
+**`-ss` before `-i` is a keyframe seek.** It lands where the container lets it,
+not where you asked, it reports nothing, and every measurement built on the
+extract is then wrong by an amount nobody can see. On that session it moved a
+camera offset by **9.4 s**, and a second use of it produced a claim that a camera
+was **119 s** out when the real error was 0.58 — both handed over as findings
+before the bug was found.
+
+    ffmpeg -ss 550 -i CLIP.MP4 -t 300 -ac 1 -ar 8000 out.wav     # NO
+    ffmpeg -i CLIP.MP4 -ac 1 -ar 8000 whole.wav                  # decode once, slice in the analysis
+
+Decode the whole track once and take windows out of the array. A 20-minute clip
+is 10 MB at 8 kHz mono, so there is nothing to optimise here. `-ss` *after* `-i`
+is accurate but decodes from the start anyway, which is the same cost with a way
+to get it wrong.
+
+Why this is in a skill and not a code comment: everything else on this page is
+about not believing a correlator. This is about not believing the extract you
+handed it, and **a tool that is approximately right and silent about it is worse
+than one that fails.**
+
+## Make the takes disagree: the check a margin cannot do
+
+The repeated-takes problem has a cheap answer, and it is not a better statistic.
+**Locate every take in the recorder file independently against the whole camera
+track, and require them all to imply the same constant offset.** A session with
+seven takes of one piece is not seven chances to be fooled; it is seven votes
+that have to agree.
+
+Three cameras against the main pair, log envelopes at 25 Hz:
+
+| camera | takes agreeing | spread | |
+|---|---|---|---|
+| Right_P1000096 | 6 of 7 | 0.042 s | 1.3 frames |
+| Front_DJI_0603 | 7 of 7 | 0.029 s | 0.9 frames |
+| Keyboard C013 | 7 of 7 | 0.049 s | 1.5 frames |
+| Left_DJI_0578 | 0 of 7 | — | **refused** |
+
+**The refusal is what makes the rest believable.** `Left_DJI_0578` does not cover
+those takes and its answers disagree by hundreds of seconds. No per-take
+threshold would have caught it — its best take scores r 0.767 with a healthy
+margin, which passes anything you would set. Only the disagreement catches it.
+
+For contrast, on the same material a single take correlated over the whole file
+returned **r 0.851, margin 0.076, and was 9.4 s wrong**, having locked onto a
+different take.
+
+Correlate log envelopes, **not waveforms**: `arc pair` over 120 s of a camera mic
+against a main pair in a 2.5 s church reads **coherence 0.002**. They share the
+shape of the music over time and nothing else.
+
+A working implementation is `~/Projects/arc/migrations/2024-05-21-laurens-leuven/camera-offsets.py`;
+arc#260 proposes it as `arc sync`, which is where it belongs.
+
+## An NLE project that already has a sync is half an answer
+
+Check both halves separately, because they fail separately. On that session the
+existing Resolve sync timeline had **camera-to-camera offsets good to 0.04–0.10 s**
+and the whole group **4.8 s out against the audio** — one shared error, which is
+what a take render dropped onto a timeline by hand looks like.
+
+So: take the relative sync from the project, measure the one anchor. Reading the
+project wholesale reproduces its error; measuring every camera separately throws
+away work someone already did well.
+
 ## When nothing automatic works, one hand alignment is enough
 
 Both automated routes can fail on the same session. The fastest way out is to
