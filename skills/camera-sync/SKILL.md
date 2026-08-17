@@ -59,6 +59,33 @@ until a file says otherwise.
 Both clocks are wrong and it does not matter: the difference between them is
 constant over a session and is what you are trying to recover.
 
+### Ask the clock WHICH CLIPS COVER THE TAKE before correlating anything
+
+Coverage is a question about hours, and a correlator answers it in the slowest,
+least reliable way available. `creation_time` plus duration settles in seconds
+which clips could possibly contain a take, and the correlator then only has to
+choose among those. Do it in that order.
+
+**But brands do not agree on the zone, and that is the whole trap.** On the
+2024-05-21 Laurens Leuven shoot:
+
+| brand | `creation_time` holds |
+|---|---|
+| Sony (`A001_…C0NN.mov`), DJI | **UTC** |
+| Panasonic (`P10000NN.MP4`) | **local**, with no zone marker |
+
+Two hours apart in summer, and nothing in the file says so. Read naively, every
+Sony and DJI clip appears to have been shot two hours before it was, and the
+answer flips: a 4K Sony reel that looks like it covers the take turns out to end
+52 minutes before it, while the Panasonic that really does cover it looks two
+hours late. The tell is a cross-check you already have — a clip you KNOW covers
+the take from correlation should agree with its own clock. If it does not, the
+zone is wrong, not the clip.
+
+Sanity-check both directions before believing either: the clock says which clips
+are candidates, the correlator says which one actually matches, and a finding is
+only safe when they agree.
+
 ## Get a first estimate from roll-starts
 
     camera-session-sync Video/ Media/ --project "Session.RPP"
