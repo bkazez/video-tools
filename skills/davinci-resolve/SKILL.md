@@ -68,7 +68,18 @@ The names are not the ones the UI shows:
 | `Data Level` | **Singular.** `Auto`, `Full`, `Video`. Not "Data Levels" |
 | `Input Color Space` | e.g. `S-Gamut3.Cine/S-Log3`, `Rec.709 Gamma 2.4`. Defaults to `Project` |
 | `FPS` | Settable, and this is the slow-motion fix |
-| `Video Frame Rate`, `Shot Frame Rate`, `Super Scale` | read-only; setting them returns False |
+| `Super Scale` | Settable, **with an integer**: `1` off, `2`, `3`, `4` |
+| `Video Frame Rate`, `Shot Frame Rate` | read-only; setting them returns False |
+
+**`Super Scale` was listed here as read-only and it is not** — it was tested with
+a string. `SetClipProperty("Super Scale", "2")` and `"2x"` both return False and
+change nothing; `SetClipProperty("Super Scale", 2)` returns True and reads back
+`2`. Worth having whenever a timeline enlarges its source, which is every
+vertical crop out of 1080p footage: on the 2024-05-21 Laurens Leuven vertical,
+where a 1920 × 1080 angle is blown up 3.16×, 2× measured **+3.8 % edge energy**
+against no Super Scale. **3× measured worse than 2×** (+1.4 %), so sweep it
+rather than assuming more is better, and measure on a rendered frame — the
+setting is invisible in the timeline.
 
 **Log footage carries no tag that says it is log.** The container reports
 `color_transfer=unknown`, so Resolve cannot infer it and will treat S-Log3 as
