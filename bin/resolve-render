@@ -1,0 +1,137 @@
+#!/Users/bkazez/Projects/arc/.venv/bin/python
+"""Render a Resolve timeline, and refuse to write lossy audio onto a master.
+
+    resolve-render TIMELINE --out DIR [--preset "H.265 Master"] [--name NAME]
+                   [--width W --height H] [--codec lpcm] [--bits 24] [--rate 48000]
+                   [--allow-lossy]
+
+WHY IT EXISTS. Resolve's delivery presets are picture presets: "H.265 Master"
+and "ProRes Master" both arrive with **320 kbps AAC** on the audio, and nothing
+in the UI or the API says so. On a hall recording that residual sits only
+26.4 dB under the programme -- the reverb tail is what AAC spends its bits on
+last -- so a mix that took a week is delivered through a codec chosen for a
+phone call. Ben, on catching it: "it makes no sense to save ProRes video with
+such bad quality".
+
+So this tool forces linear PCM by default and, more importantly, CHECKS. Three
+things are checked and each has a way of failing silently:
+
+- **the settings.** `SetRenderSettings` returns one boolean for the whole dict,
+  so a refused audio codec is invisible next to an accepted width. The values
+  are read back with `GetCurrentRenderMode`/`GetRenderSettings` where Resolve
+  exposes them.
+- **the render finishing.** Waiting for the FILE to appear delivers a truncated
+  movie with no moov atom -- that happened, 135 MB of nothing. The wait is on
+  `IsRenderingInProgress()`, and the job status has to end at Complete.
+- **the file.** The report that wrote a file is not evidence about the file, so
+  the output is decoded with ffprobe and the audio codec, depth and rate are
+  read off the container itself.
+
+`--allow-lossy` exists for a genuine web upload and says what it did.
+"""
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import time
+
+sys.path.append("/Library/Application Support/Blackmagic Design/DaVinci Resolve/"
+                "Developer/Scripting/Modules/")
+import DaVinciResolveScript as bmd     # noqa: E402
+
+LOSSLESS = ("lpcm",)
+
+
+def probe(path):
+    out = subprocess.run(["ffprobe", "-v", "error", "-show_streams", "-of", "json", path],
+                         capture_output=True, text=True)
+    if out.returncode:
+        return None
+    return json.loads(out.stdout)["streams"]
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("timeline")
+    ap.add_argument("--out", required=True)
+    ap.add_argument("--preset", default="H.265 Master")
+    ap.add_argument("--name")
+    ap.add_argument("--width", type=int)
+    ap.add_argument("--height", type=int)
+    ap.add_argument("--codec", default="lpcm")
+    ap.add_argument("--bits", type=int, default=24)
+    ap.add_argument("--rate", type=int, default=48000)
+    ap.add_argument("--allow-lossy", action="store_true")
+    a = ap.parse_args()
+
+    if a.codec not in LOSSLESS and not a.allow_lossy:
+        sys.exit(f"{a.codec!r} is a lossy audio codec. Pass --allow-lossy if that "
+                 f"is really wanted; the default is linear PCM because a master "
+                 f"delivered through 320 kbps AAC leaves a residual 26 dB under "
+                 f"the programme.")
+
+    r = bmd.scriptapp("Resolve")
+    if not r:
+        sys.exit("Resolve is not answering: open it, and set External scripting to Local")
+    p = r.GetProjectManager().GetCurrentProject()
+    t = next((p.GetTimelineByIndex(i) for i in range(1, p.GetTimelineCount() + 1)
+              if p.GetTimelineByIndex(i).GetName() == a.timeline), None)
+    if not t:
+        sys.exit(f"no timeline called {a.timeline!r} in project {p.GetName()!r}")
+    p.SetCurrentTimeline(t)
+    os.makedirs(a.out, exist_ok=True)
+
+    if not p.LoadRenderPreset(a.preset):
+        sys.exit(f"no render preset called {a.preset!r}")
+    settings = {"TargetDir": a.out, "CustomName": a.name or a.timeline,
+                "SelectAllFrames": True,
+                "ExportAudio": True, "AudioCodec": a.codec,
+                "AudioBitDepth": a.bits, "AudioSampleRate": a.rate}
+    if a.width:
+        settings["FormatWidth"] = a.width
+    if a.height:
+        settings["FormatHeight"] = a.height
+    if not p.SetRenderSettings(settings):
+        sys.exit("SetRenderSettings refused -- one of the keys is wrong for this preset")
+
+    before = set(os.listdir(a.out))
+    job = p.AddRenderJob()
+    print(f"{a.timeline}: rendering {a.preset}, audio {a.codec} "
+          f"{a.bits}-bit {a.rate} Hz -> {a.out}")
+    p.StartRendering([job], isInteractiveMode=False)
+    # Never wait for the file. It appears at the first frame and is unplayable
+    # until the last one, and a wait on its existence delivered a movie with no
+    # moov atom.
+    while p.IsRenderingInProgress():
+        time.sleep(3)
+    status = p.GetRenderJobStatus(job) or {}
+    if status.get("JobStatus") != "Complete":
+        sys.exit(f"render did not complete: {status}")
+
+    made = sorted(set(os.listdir(a.out)) - before)
+    if not made:
+        sys.exit(f"the job says Complete and {a.out} gained no file")
+    path = os.path.join(a.out, made[0])
+
+    streams = probe(path)
+    if not streams:
+        sys.exit(f"ffprobe cannot read {path}: the render is not a playable file")
+    audio = [s for s in streams if s["codec_type"] == "audio"]
+    video = [s for s in streams if s["codec_type"] == "video"]
+    if not audio:
+        sys.exit(f"{path} has no audio stream")
+    codec = audio[0]["codec_name"]
+    if not codec.startswith("pcm_") and not a.allow_lossy:
+        sys.exit(f"{path} came out as {codec}, not PCM. Resolve accepted the "
+                 f"setting and wrote something else; do not deliver this file.")
+    print(f"  video  {video[0]['codec_name']} {video[0]['width']}x{video[0]['height']}")
+    print(f"  audio  {codec} {audio[0].get('sample_rate')} Hz "
+          f"{audio[0].get('channels')} ch"
+          + ("   *** LOSSY, by --allow-lossy ***" if not codec.startswith("pcm_") else ""))
+    print(f"  {path}  ({os.path.getsize(path) / 1e6:.0f} MB)")
+
+
+if __name__ == "__main__":
+    main()

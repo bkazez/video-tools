@@ -155,6 +155,33 @@ swaps the media behind a pool item and leaves every timeline position untouched.
 Verify by snapshotting each timeline item's start and end frames before and
 after — a relink that moves an edit has destroyed hand-alignment work.
 
+## Rendering: every "Master" preset ships 320 kbps AAC
+
+    bin/resolve-render "Timeline name" --out DIR --preset "H.265 Master"
+
+Use it rather than driving the render API by hand. A Resolve delivery preset is
+a *picture* preset: "H.265 Master" and "ProRes Master" both arrive with **320
+kbps AAC** on the audio, and neither the UI nor the API mentions it. On a hall
+recording that residual sits **26.4 dB under the programme** — a reverb tail is
+the last thing a perceptual codec spends bits on — so a mix that took a week
+ships through a codec meant for speech. Delivered that way once on the
+2024-05-21 Laurens Leuven vertical; the PCM re-render measured **207–219 dB**
+signal-to-residual per second.
+
+The tool forces `AudioCodec: lpcm`, 24-bit, 48 kHz, and refuses anything lossy
+without `--allow-lossy`. The picture codec is untouched — this costs about
+1 MB per minute per channel and nothing else.
+
+Three checks in it, and each covers something that fails silently:
+
+- **`SetRenderSettings` returns one boolean for the whole dict**, so a refused
+  audio codec is invisible beside an accepted width. Read the file, not the call.
+- **Wait on `IsRenderingInProgress()`, never on the file appearing.** The output
+  exists from the first frame and has no moov atom until the last — waiting on
+  the path delivered 135 MB of unplayable movie.
+- **ffprobe the result.** `codec_name` must start with `pcm_`. The report that
+  wrote a file is not evidence about the file.
+
 ## Disk
 
 Optimized media and render cache for a folder of 4K originals will fill a disk
