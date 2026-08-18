@@ -227,6 +227,76 @@ only `noiseReduction` parameter in the whole API belongs to the Super Scale
 upscaler. So it is set on one clip by hand, and it reaches every other clip only
 as part of a grade — see the propagation section below.
 
+## Matching shots from different cameras
+
+The anchors are materials -- one pale low-saturation surface (lit stone, a
+painted case), the black clothing, and skin -- measured on the DELIVERED
+render, with skin matched on hue rather than level when the subjects sit in
+different light. Two findings from a three-camera church shoot (the worked
+chain is `migrations/2024-05-21-laurens-leuven/grade-luts.py` in arc) govern
+how far to trust those numbers:
+
+- **Matching the meter is not matching the perception.** With the case matched
+  to within two code values in all three angles, the picture still read as
+  three different rooms: each frame's surround differs (one shot is mostly
+  black coat, another is wall-to-wall lit case), the eye adapts to the
+  surround, and identical patch values read as different colours. The finished
+  match carried a deliberate 10-level spread on the very anchor that had been
+  "matched", set by eye. Converge the meter into a family, then finish at
+  thumbnail size.
+- **Judge every round on a side-by-side strip of all angles at thumbnail
+  size.** Faults invisible at full size are obvious small. And expect a
+  percentile-plus-saturation patch mask to re-select different pixels on every
+  regraded render -- it is a moving measurement, so trends across rounds are
+  only trustworthy from fixed-coordinate patches (a hand-picked skin box) or
+  from the eye.
+
+**Translate colour feedback into axes before touching anything.** Each row is
+a real note from that shoot and the fix that measured right:
+
+| the note | the axis, and the fix |
+|---|---|
+| "yellow, no reds" in skin | blue starvation. Hue angle 60(G-B)/(R-B): red-orange skin sits near 11 deg, yellow at 18+. Desaturation can NEVER fix a yellow cast -- it cannot add blue -- so raise B toward the reference B/R, capped |
+| "no blues in it at all" | count lit pixels with B > R against a neutral angle AND the ungraded source. The source usually has the blue (8-10% there against 2.7% delivered) and the grade's warm slope killed it; give it back only to pixels already relatively cool, so the approved warm subjects hold |
+| "a bit green" | G against BOTH neighbours. A warm correction that moves only R and B leaves the green exactly where it was; trim G itself |
+| "dismal, too dark" right after a desaturation | luma is unchanged -- the colourfulness was propping up apparent brightness (Helmholtz-Kohlrausch). The fix is a midtone lift, not more colour |
+
+**Two stages that each fixed a defect can stack into a new one.** A warm-pixel
+desaturation tuned when it ran alone, plus a lift whose top compression also
+flattens hue, left skin LESS saturated than the reference it was matched to.
+When a stage is added downstream, re-sweep the ones upstream.
+
+## When one primary cannot hold the shot: bake the grade as a 3D LUT
+
+A shot with two illuminants -- a face lit by a warm lamp against a wall lit by
+the window -- or a material-selective cast cannot be fixed by any
+slope/offset/power: the correction that fixes one material un-fixes the other.
+An RGB-to-RGB 3D LUT can express per-material corrections and stays
+scriptable, diffable and reproducible: bake the whole chain (base grade plus
+secondaries) offline and apply one .cube per camera.
+
+- **A secondary in a LUT is a membership function times a capped gain.** Pick
+  the axis that actually separates the materials: chroma when it can (warmth
+  1 - B/R separates skin at 0.67 from near-neutral stone at 0.09), luma when
+  chroma cannot (bright pipe metal and cream stone both sat at B/R 0.84, but
+  the stone topped out near luma 160 and the metal's speculars ran 180+), or a
+  band with a cut (blue restored over B/R 0.80..0.95 with a cut above 1.00 so
+  blue glass kept its blue). Smoothstep the membership and cap the gain -- an
+  uncapped pull to a fixed chroma target turned wood pink; a 1.25x cap kept it
+  brown while the same rule fixed skin.
+- **Tune every secondary against two materials at once**: the one being fixed
+  AND the nearest one that must not move, both through the full chain.
+- **Grid error is measured, not assumed.** Evaluate the baked grid against the
+  exact transform on real frame pixels; at 65 points expect a mean near 0.1
+  and a max of 2-3 8-bit levels, worst where a luma-gated stage is steep.
+- **Preview cheaply.** A stage appended at the END of the chain previews
+  directly on the delivered render's own pixels; a mid-chain change needs the
+  full chain simulated on ungraded source frames -- and the simulation is
+  trusted only after it reproduces the delivered numbers at the current
+  settings.
+- After any re-bake: re-render, re-measure on the delivered file, and re-run
+  the noise and empty-code checks whenever a stage adds slope.
+
 ## Propagating one clip's grade to the whole project
 
     bin/resolve-copy-grade --from "Fauré T14" --export-lut "session grade.cube" --save
@@ -276,6 +346,8 @@ against one with it disabled.
 `TimelineItem.SetLUT(nodeIndex, lutName)` where the name is relative to the LUT
 library. Two things make this fail silently:
 
+- **`SetLUT` refuses an absolute path outright.** The cube must sit in the
+  LUT library and be named relative to it (`leuven/leuven-close.cube`).
 - **`Project.RefreshLUTList()` must be called after copying a new `.cube` into
   the library.** Until then Resolve has not scanned it and `SetLUT` just returns
   `False` with no error. This costs an afternoon if you do not know it.
