@@ -211,8 +211,12 @@ enum Film {
         let below = NSRect(x: 0, y: 0, width: bounds.width, height: max(product.minY, 0))
         let above = NSRect(x: 0, y: product.maxY, width: bounds.width,
                            height: max(bounds.height - product.maxY, 0))
-        let roomier = below.height >= above.height ? below : above
-        return roomier.height >= height + 24 ? roomier : nil
+        // ABOVE by preference, not whichever happens to be roomier. A title that moves from
+        // over the product to under it between one shot and the next makes the viewer look for
+        // it; every film picks one band and keeps it, and above is where a caption is looked
+        // for. Below is the fallback for a product that leaves no room over its head.
+        if above.height >= height + 24 { return above }
+        return below.height >= height + 24 ? below : nil
     }
 
     /// The dark the words are read against.

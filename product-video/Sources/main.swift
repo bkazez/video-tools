@@ -117,13 +117,35 @@ func camera(at time: Double) -> (scale: CGFloat, target: CGFloat, focus: CGPoint
     var state: (scale: CGFloat, target: CGFloat, focus: CGPoint)?
     for move in timeline.camera where move.at <= time {
         let done = min(1, max(0, (time - move.at) / max(move.seconds, 0.001)))
-        // The same ease the frame source uses for its own moves.
-        let eased = done < 0.5 ? 2 * done * done : 1 - pow(-2 * done + 2, 2) / 2
+        // Cubic ease in and out, and the SAME eased fraction drives all three axes -- the two
+        // the camera pans across and the one it dollies along. A real camera is one object on
+        // one arm: it cannot start its sideways move on a different curve from its move
+        // forward. Easing each axis separately, or easing only the dolly as this did, gives a
+        // move that arrives in stages and reads as a computer doing it. Cubic rather than the
+        // quadratic it used to be because the gentler ends are the whole difference between a
+        // camera being pushed and a value being animated.
+        let eased = done < 0.5 ? 4 * done * done * done : 1 - pow(-2 * done + 2, 3) / 2
         let from = state?.scale ?? 1
-        state = (from * pow(move.to / from, eased), move.to, move.focus)
+        // The focus travels WITH the scale, on that same curve. It used to be taken whole on
+        // the move's first frame while only the scale interpolated, so a pull-back aimed
+        // anywhere but where the push-in ended jumped sideways in one frame and then zoomed --
+        // which reads as a cut to a second camera rather than as one camera moving.
+        let fromFocus = state?.focus ?? move.focus
+        let focus = CGPoint(x: fromFocus.x + (move.focus.x - fromFocus.x) * eased,
+                            y: fromFocus.y + (move.focus.y - fromFocus.y) * eased)
+        state = (from * pow(move.to / from, eased), move.to, focus)
     }
     return state
 }
+
+/// How much of the camera's move the room behind the product takes.
+///
+/// Everything used to travel under one transform, which is a photograph being magnified: the
+/// wall behind the phone grew exactly as fast as the phone did, and the shot read as flat. A
+/// real lens moving closer sees the near thing change much faster than the far one. Well under
+/// half is enough -- parallax is read from the RATE things separate, and a room that moves
+/// visibly at all stops the picture being a poster.
+let roomParallax: CGFloat = 0.4
 
 /// Whether the next words begin where these ones end, near enough that fading
 /// the first out would put a hole between two halves of one thought.
@@ -183,13 +205,28 @@ for index in 0..<timeline.frames {
     // a bare window is the whole picture and for a phone is the glass.
     let box = places.product
     let lens = camera(at: now)
-    if let lens, lens.scale > 1.0001 {
-        let focus = CGPoint(x: box.minX + lens.focus.x * box.width / timeline.width,
-                            y: box.maxY - lens.focus.y * box.height / timeline.height)
+    let focusInCanvas: CGPoint? = lens.map {
+        CGPoint(x: box.minX + $0.focus.x * box.width / timeline.width,
+                y: box.maxY - $0.focus.y * box.height / timeline.height)
+    }
+    // The room first, under a WEAKER camera than the product gets, so moving closer separates
+    // the two the way a lens does. Drawn and restored on its own so the product's transform is
+    // not built on top of it.
+    if let room {
+        if let lens, let focus = focusInCanvas, lens.scale > 1.0001 {
+            let near = 1 + (lens.scale - 1) * roomParallax
+            context.saveGraphicsState()
+            Film.lens(scale: near, target: near, focus: focus, in: canvas).concat()
+            Film.drawBackdrop(room, in: canvas)
+            context.restoreGraphicsState()
+        } else {
+            Film.drawBackdrop(room, in: canvas)
+        }
+    }
+    if let lens, let focus = focusInCanvas, lens.scale > 1.0001 {
         context.saveGraphicsState()
         Film.lens(scale: lens.scale, target: lens.target, focus: focus, in: canvas).concat()
     }
-    if let room { Film.drawBackdrop(room, in: canvas) }
     if let title = timeline.title, timeline.chrome == "macos" {
         Film.drawChrome(title, in: canvas)
     }
