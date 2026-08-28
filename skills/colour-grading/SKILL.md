@@ -79,6 +79,13 @@ Skin is the measurement that decides a grade, so identify it carefully:
 - **Measure the graded result on the same pixels as the source.** Take the mask from
   the ungraded frame and index both with it, so nothing shifts because a threshold
   moved.
+- **A pixel diff cannot be the control that a grade landed.** Resolve's
+  `Project.ExportCurrentFrameAsStill` is not repeatable: two exports of the same
+  timecode with nothing changed between them differ by mean 3.0 and max 33 levels
+  over the frame, because temporal noise reduction has not settled the same way.
+  Medians over large patches survive it and are what to compare; and to be sure a
+  correction reached the pipeline at all, toggle its node with `SetNodeEnabled` and
+  export the same frame both ways.
 
 Lit skin wants 60-70% of full, and R/G about 1.29-1.40 with B/G 0.83-0.87 — the
 ColorChecker skin patches in sRGB, which is a defensible target when there is no
@@ -111,6 +118,24 @@ without any hue tool at all — with saturation only trimmed to 0.94.
 
 Keep the curve monotone (Fritsch-Carlson tangents) so it cannot ring between points
 and invert a gradient, and verify by re-measuring the same frames through it.
+
+**Never fix skin by desaturating it. Skin is blue-STARVED, and desaturation adds
+blue.** Both ratios move toward 1 together, so a desaturation sized to bring R/G
+down to the ColorChecker range drags B/G *up* out of it — and that reads as dead,
+whatever the red is doing. Measured on a session whose voice angle sat at
+R/G 1.607 B/G 0.798: a warm-pixel desaturation landed 1.360/0.921, inside the
+range on red and 6% over it on blue, and Ben rejected it on sight — "the skin tone
+looks very dead ... it def needs warmth". The fix is a fixed three-channel GAIN on
+the same membership, derived from the target pair, which brings blue down with
+red: 1.442/0.814, luma untouched. Derive the gain from the target rather than
+typing it, so the target is the only knob:
+
+    g = [rg / (R/G), 1, bg / (B/G)]          # rg, bg = where skin should land
+    g *= luma(v) / luma(v * g)               # and luma does not move
+
+The shoulder paragraph above is the same fact from the other side: a curve lowers
+R/G because it compresses red while green is still climbing, which is why it does
+not cost the blue.
 
 ## Measure the noise every time, before and after — this is not optional
 
@@ -296,6 +321,25 @@ secondaries) offline and apply one .cube per camera.
   settings.
 - After any re-bake: re-render, re-measure on the delivered file, and re-run
   the noise and empty-code checks whenever a stage adds slope.
+
+## Correcting a whole angle without touching the grades already on it
+
+When the clip grades are approved and only one thing is wrong across the angle,
+the correction goes AFTER them, once, in a **colour group's post-clip graph**:
+
+    cg = project.AddColorGroup("voice")        # on the PROJECT, not the timeline
+    for it in items: it.AssignToColorGroup(cg)
+    cg.GetPostClipNodeGraph().SetLUT(1, "session/angle.cube")
+
+Nothing existing is disturbed and deleting the group undoes the lot, which is what
+makes it the right first move on "the colour is ugly" when the picture has been
+approved. The alternatives are worse: there is no `AddNode` in the scripting API,
+so per-clip means overwriting a node that is already doing something, and a node
+carrying a power window would confine the correction to that window.
+
+`AddColorGroup` and `GetColorGroupsList` are on the **Project** even though the
+README describes the list as "all group objects in the timeline"; calling them on a
+Timeline returns None and fails as a TypeError.
 
 ## Propagating one clip's grade to the whole project
 
