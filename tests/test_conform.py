@@ -64,8 +64,8 @@ def main():
            item("b", "take 8", 52.9485, 15.8215, 55.6365),
            item("c", "take 7", 68.64, 3.516, 66.4199),
            item("d", "take 3", 72.1326, 20.0, 72.5049)]
-    spans, dropped, added = C.clock_deltas(was, now)
-    check("nothing is dropped or added", (dropped, added), (0, 0))
+    spans, gone, added = C.clock_deltas(was, now)
+    check("nothing is dropped or added", (gone, added), ([], 0))
     check("a take that only got longer has not moved", spans[1]["delta"], 0.0)
     check("the take after the join moved by its own clock, not by the mix's growth",
           round(spans[2]["delta"], 6), 1.0)
@@ -75,9 +75,10 @@ def main():
           != round(now[2]["soffs"] - was[2]["soffs"], 4), True)
 
     print("\nan item that is gone, or new")
-    fewer, dropped, added = C.clock_deltas(was, now[:-1])
-    check("an item the re-comp removed is reported, not guessed at",
-          (len(fewer), dropped, added), (3, 1, 0))
+    fewer, gone, added = C.clock_deltas(was, now[:-1])
+    check("an item the re-comp removed is named, not counted -- picture cut "
+          "over it is showing a take that is no longer in the mix",
+          (len(fewer), [g["name"] for g in gone], added), (3, ["take 3"], 0))
 
     print("\nwhich take a moment belongs to")
     check("inside an item", C.delta_at(spans, 60.0)[1], "take 8")
@@ -87,13 +88,50 @@ def main():
     check("after everything", C.delta_at(spans, 500.0)[1], "take 3 (after it)")
 
     print("\nwhich take a picture clip is showing")
-    check("a clip wholly inside one take", C.majority(spans, 55.0, 60.0)[1], "take 8")
+    check("a clip wholly inside one take",
+          C.majority(spans, 55.0, 60.0)["over"], "take 8")
     check("a clip cut a little before the join follows the take it spends its "
           "time over, not the one under its first frame",
-          C.majority(spans, 67.0, 70.6)[1], "take 7")
+          C.majority(spans, 67.0, 70.6)["over"], "take 7")
     check("and that is not what its first frame would have said",
           C.delta_at(spans, 67.0)[1], "take 8")
-    check("the delta that comes with it", round(C.majority(spans, 67.0, 70.6)[0], 6), 1.0)
+    check("the delta that comes with it",
+          round(C.majority(spans, 67.0, 70.6)["delta"], 6), 1.0)
+    check("a clip follows its OWN take where the comp uses it",
+          C.majority(spans, 66.0, 70.0, take="take 7")["over"], "take 7")
+    check("and follows the music where the comp uses its take nowhere near -- "
+          "there is no clock of its own to follow there",
+          C.majority(spans, 55.0, 58.0, take="take 7")["over"], "take 8")
+    check("a clip of no take arc knows follows the music too",
+          C.majority(spans, 55.0, 58.0, take="C0292.MP4")["over"], "take 8")
+
+    print("\nmatching a take across the two applications")
+    names = {"Polyphemus 1", "Polyphemus 3", "Polpyhemus 7", "Polyphemus 8"}
+    check("an exact name matches itself",
+          C.matches("Polyphemus 8", names), ("Polyphemus 8", False))
+    check("a transposed name matches, and says it is spelled differently",
+          C.matches("Polyphemus 7", names), ("Polpyhemus 7", True))
+    check("and NOT the take whose number is different -- difflib scores "
+          "'Polyphemus 1' above 'Polpyhemus 7' and put take 1's clock on take 7",
+          C.matches("Polyphemus 7", names)[0] != "Polyphemus 1", True)
+    check("a name that is nobody's take does not match",
+          C.matches("C0292.MP4", names), (None, False))
+    check("two arc items that reduce the same way are refused rather than picked",
+          C.matches("Polyphemus 7", names | {"Polyhpemus 7"}), (None, False))
+    check("a multicam angle comes off the name",
+          C.take_of("Polyphemus 7 - Video 2"), "Polyphemus 7")
+
+    print("\nwhich take replaced a deleted one")
+    grew = [{"name": "take 8", "at": 52.9, "len": 7.1, "now_at": 52.9, "now_len": 15.0},
+            {"name": "take 7", "at": 67.8, "len": 3.3, "now_at": 68.6, "now_len": 3.5}]
+    dead = {"name": "take 3", "at": 59.9, "len": 8.0}
+    check("the item that grew to fill it, read off the NEW positions",
+          C.now_over(grew, dead), "take 8")
+    check("and the old positions would have said nobody",
+          C.delta_at(C.clock_deltas(
+              [dict(g, id=g["name"], soffs=0) for g in grew] + [dict(dead, id="d", soffs=0)],
+              [dict(g, at=g["now_at"], len=g["now_len"], id=g["name"], soffs=0)
+               for g in grew])[0], 63.9)[1].endswith("(after it)"), True)
 
     print("\nclosing what the move opened")
     doc = Doc([Track("video1", [Clip(0, 100, 0), Clip(100, 50, 500), Clip(200, 40, 900)]),

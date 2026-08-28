@@ -399,6 +399,13 @@ class Timeline:
                 raise DrtError(f"{item.name!r} has no source in-point to set")
             self._set(item.src_in, src_in)
 
+    def drop(self, item):
+        """Take one item off the timeline. What is left has to cover it, or the
+        caller has left a hole -- nothing here checks that, because a hole is
+        sometimes the point."""
+        start = self.text.rfind("\n", 0, item.element.start)
+        self._edits.append((start, item.element.end, ""))
+
     def set_end(self, by):
         """Record that the timeline itself got `by` frames longer or shorter."""
         self._grow_media_extents(by)

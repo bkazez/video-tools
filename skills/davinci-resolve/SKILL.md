@@ -109,10 +109,39 @@ clock. On the 2026-08-27 Polyphemus re-comp the mix grew exactly 1.000 s while
 the take at the join started 0.181 s earlier in its own source, so items before
 the join moved 0 and items after moved 1.000 — a single ripple of "the mix got a
 second longer" is wrong at the join and right nowhere that matters. A camera
-clip then follows the item it spends most of its time over rather than the one
-under its first frame, which for a clip cut a little early is the take before
-it. And the second of picture comes from lengthening the clip that used to meet
-the one that moved, out of its own source -- never from a hole.
+clip then follows its OWN take -- the multicam clip is a recording of that take
+-- and only a clip of no take arc knows follows whatever it overlaps. And the
+second of picture comes from lengthening the clip that used to meet the one that
+moved, out of its own source, never from a hole.
+
+**Three things that go wrong, all of them silently.**
+
+- **The baseline revision.** Conform from a revision that already contains part
+  of the change and everything before it is never applied, while every check
+  passes: they all ask whether the timeline matches the plan, not whether the
+  plan was right. Where the video was cut to a REAPER edit, the baseline is the
+  commit that imported it -- not the last commit that moved something.
+- **Matching a take name across the two applications.** They are typed by hand
+  and they disagree: this session has arc's `Polpyhemus 7` against Resolve's
+  `Polyphemus 7`. Nearest-string matching is the wrong tool and dangerously so
+  -- `difflib` scores `Polyphemus 7` against `Polyphemus 1` HIGHER than against
+  `Polpyhemus 7`, so it put take 1's clock on take 7's picture. Match on the
+  letters in any order plus the number: a transposition matches exactly, and two
+  different takes cannot.
+- **A deleted item.** A re-comp can drop a piece of the edit outright -- "one
+  take through the passage instead" -- and the picture cut over it is then
+  showing a take you cannot hear. No move fixes that; it has to be re-cut, and
+  the honest default is to say so rather than to move it somewhere plausible.
+
+**Camera scratch audio does not settle it, and it is worth knowing why before
+spending a session on it.** Measuring a camera window against the mix with
+`arc splice` on this material returned -0.14, -0.26 and -1.23 frames on some
+windows and -8 to -23 frames on others, at coherences of 0.47-0.78, and the
+answers moved when the search window was retuned. The `camera-sync` skill
+already says why: a camera mic against a main pair in a 2.5 s church reads
+coherence 0.002, and what works is locating every take independently against
+the whole camera track and requiring one constant -- not one window against one
+mix.
 
 Two more things the import does that are worth knowing: it takes the **filename**
 as the timeline's name (not the `<ProjectName>` inside), and it writes the

@@ -42,6 +42,7 @@ is left alone.
 recording project is in git, so it is a sha, a tag, or `HEAD~1`.
 """
 import argparse
+import difflib
 import json
 import os
 import shutil
@@ -80,7 +81,11 @@ def at_revision(document, revision, work):
     if out.returncode:
         die(f"git show {revision}:{filename} failed -- is the project in git, "
             f"and is {revision} a revision of it?")
-    path = os.path.join(work, f"was-{filename}")
+    # The revision is IN the name. Both sides of the comparison come through
+    # here, and a fixed name meant the second checkout overwrote the first --
+    # which reads as "nothing in the mix moved", the one answer that stops the
+    # tool without looking wrong.
+    path = os.path.join(work, f"{revision.replace('/', '-')}-{filename}")
     with open(path, "wb") as fh:
         fh.write(out.stdout)
     return path
@@ -98,11 +103,31 @@ def clock_deltas(was, now):
             continue
         spans.append({
             "name": old["name"], "at": old["at"], "len": old["len"],
+            "now_at": fresh["at"], "now_len": fresh["len"],
             "delta": (fresh["at"] - fresh["soffs"]) - (old["at"] - old["soffs"])})
+    gone = [{"name": o["name"], "at": o["at"], "len": o["len"]}
+            for o in was if o["id"] not in new]
     spans.sort(key=lambda s: s["at"])
-    dropped = len(was) - len(spans)
-    added = len(now) - len(spans)
-    return spans, dropped, added
+    gone.sort(key=lambda s: s["at"])
+    return spans, gone, len(now) - len(spans)
+
+
+def now_over(spans, dead):
+    """Which take the mix plays where a deleted item used to be.
+
+    Asked of the NEW positions, not the old ones: the deleted item's stretch of
+    music is not in the old layout any more, and looking for it there finds
+    nothing and says "after it". What actually covers it is the item that GREW
+    to fill it -- on this session, `Polyphemus 8` going from 7.05 s to 15.00 s.
+    """
+    middle = dead["at"] + dead["len"] / 2
+    best, best_overlap = None, 0.0
+    for span in spans:
+        overlap = (min(dead["at"] + dead["len"], span["now_at"] + span["now_len"])
+                   - max(dead["at"], span["now_at"]))
+        if overlap > best_overlap:
+            best, best_overlap = span, overlap
+    return best["name"] if best else None
 
 
 def delta_at(spans, when):
@@ -120,19 +145,70 @@ def delta_at(spans, when):
     return spans[0]["delta"], spans[0]["name"] + " (before it)"
 
 
-def majority(spans, start, finish):
-    """The arc item a clip spends most of its time over: the take it is showing."""
-    best, best_overlap = None, 0.0
-    for span in spans:
-        overlap = min(finish, span["at"] + span["len"]) - max(start, span["at"])
-        if overlap > best_overlap:
-            best, best_overlap = span, overlap
+def take_of(name):
+    """A picture clip's take, from a name that may carry a multicam angle."""
+    return name.rsplit(" - ", 1)[0].strip() if " - " in name else name.strip()
+
+
+def spelling(name):
+    """A take name reduced to what a typo cannot change: its letters in any
+    order, and its number.
+
+    Take names are typed by hand and they do not always agree between the audio
+    and the video -- this session has arc's `Polpyhemus 7` against Resolve's
+    `Polyphemus 7`. Nearest-string matching is the wrong tool for that, and
+    dangerously so: `difflib` scores `Polyphemus 7` against `Polyphemus 1`
+    HIGHER than against `Polpyhemus 7`, so it silently put take 1's clock on
+    take 7's picture. Letters-plus-number matches a transposition exactly and
+    refuses two different takes, because the number is what tells them apart.
+    """
+    letters = tuple(sorted(c for c in name.lower() if c.isalpha()))
+    digits = "".join(c for c in name if c.isdigit())
+    return letters, digits
+
+
+def matches(take, names):
+    """The arc item name that is this take, and whether it is spelled the same."""
+    if take in names:
+        return take, False
+    key = spelling(take)
+    same = sorted(n for n in names if spelling(n) == key)
+    return (same[0], True) if len(same) == 1 else (None, False)
+
+
+def majority(spans, start, finish, take=None):
+    """The arc item a clip follows.
+
+    The take a clip SHOWS decides it, not the moment it happens to start at: a
+    picture clip cut a little before a join begins over the take before it, and
+    following that one leaves it a join out of sync with the take on screen.
+    Among the items of its own take, the one it spends most of its time over.
+    Only a clip whose take arc does not name -- a fixed wide, a title -- falls
+    back to whatever it overlaps most.
+    """
+    def widest(candidates):
+        best, best_overlap = None, 0.0
+        for span in candidates:
+            overlap = min(finish, span["at"] + span["len"]) - max(start, span["at"])
+            if overlap > best_overlap:
+                best, best_overlap = span, overlap
+        return best
+
+    if take:
+        arc_name, differs = matches(take, {s["name"] for s in spans})
+        if arc_name:
+            own = widest([s for s in spans if s["name"] == arc_name])
+            if own:
+                return {"delta": own["delta"], "over": own["name"],
+                        "spelled": (take, arc_name) if differs else None}
+    best = widest(spans)
     if best is None:
-        return delta_at(spans, start)
-    return best["delta"], best["name"]
+        delta, name = delta_at(spans, start)
+        return {"delta": delta, "over": name, "spelled": None}
+    return {"delta": best["delta"], "over": best["name"], "spelled": None}
 
 
-def conform_one(resolve, project, timeline, spans, args, work):
+def conform_one(resolve, project, timeline, spans, gone, args, work):
     name = timeline.GetName()
     fps = float(timeline.GetSetting("timelineFrameRate"))
     export = os.path.join(work, "export.drt")
@@ -157,7 +233,8 @@ def conform_one(resolve, project, timeline, spans, args, work):
 
     before = fingerprint(project, timeline, timeline)
     met = abutting(doc)
-    plan, moves = [], {}
+    plan, moves, orphans, guesses, dropped = [], {}, [], set(), set()
+    arc_spellings = {spelling(s["name"]) for s in spans} | {spelling(g["name"]) for g in gone}
     for track in doc.tracks:
         where = f"{track.kind}{track.index}"
         for item in track.items:
@@ -169,8 +246,35 @@ def conform_one(resolve, project, timeline, spans, args, work):
                 kind = "stretch"
                 take = f"{head[1]} -> {tail[1]}" if tail[1] != head[1] else head[1]
             else:
-                delta, take = majority(spans, start, finish)
+                mine = take_of(item.name)
+                answer = majority(spans, start, finish, mine)
+                delta, take = answer["delta"], answer["over"]
                 shift, grow, kind = frames(delta), 0, "shift"
+                if answer["spelled"]:
+                    guesses.add(answer["spelled"])
+                # An ORPHAN is picture cut over a piece of the comp that the
+                # re-comp DELETED. That is the one fault a conform cannot fix:
+                # every other clip needs moving, and this one is showing a take
+                # that is no longer in the mix at all. Defined against the
+                # deleted items rather than against whether the clip's take
+                # matches, because a picture deliberately laid over another
+                # take's audio is an edit, not a fault, and the original cut is
+                # full of them.
+                # ...and only for a clip whose take arc knows. A fixed wide
+                # camera works over any take and is not orphaned by one going.
+                if spelling(mine) in arc_spellings:
+                    for dead in gone:
+                        over = (min(finish, dead["at"] + dead["len"])
+                                - max(start, dead["at"]))
+                        if over <= 0.5 * min(finish - start, dead["len"]):
+                            continue
+                        instead = now_over(spans, dead)
+                        # A clip already showing the take that took the deleted
+                        # one's place is not orphaned -- it is the one piece of
+                        # picture there that was right all along.
+                        if instead and spelling(mine) != spelling(instead):
+                            orphans.append((where, item, dead, instead))
+                        break
             moves[id(item)] = (shift, grow)
             if shift or grow:
                 plan.append((where, item, kind, take, shift, grow, start))
@@ -196,6 +300,39 @@ def conform_one(resolve, project, timeline, spans, args, work):
     for where, item, gap in closed:
         print(f"  close    {where:8s} {item.name[:30]:32s} {gap:+d}f longer, so it "
               f"still meets the clip it used to meet")
+    for mine, arc_name in sorted(guesses):
+        print(f"  NOTE    the clip called {mine!r} is arc's {arc_name!r} -- same "
+              f"take, spelled differently in the two applications")
+    recut = []
+    for where, item, dead, take in orphans:
+        print(f"  ORPHAN  {where:8s} {item.name[:30]:32s} at "
+              f"{timecode(item.start.frames + origin, fps):>11s} is cut over the "
+              f"{dead['name']} the re-comp deleted; you hear {take} there now")
+        track = next(t for t in doc.tracks if f"{t.kind}{t.index}" == where)
+        index = track.items.index(item)
+        prior = track.items[index - 1] if index else None
+        if prior is None or spelling(take_of(prior.name)) != spelling(take):
+            print(f"          nothing beside it shows {take}, so this one is "
+                  f"yours to re-cut by hand")
+            continue
+        if args.recut_orphans:
+            recut.append((where, track, prior, item, take))
+            print(f"          re-cut: {prior.name!r} runs on through it, which is "
+                  f"{take} continuing -- the take you now hear")
+        else:
+            print(f"          {prior.name!r} before it is {take}; --recut-orphans "
+                  f"would run that on through instead")
+    # The re-cut is applied here, after the orphans have been reported, because
+    # what it does -- run the clip before an orphan on through it -- is only
+    # decidable once the orphan is known, and a dry run has to show it.
+    for where, track, prior, dead_clip, take in recut:
+        doc.move(prior, duration=dead_clip.end - prior.start.frames)
+        doc.drop(dead_clip)
+        dropped.add(dead_clip)
+        met = [row for row in met if row[1] is not dead_clip and row[2] is not dead_clip]
+    closed += close_gaps(doc, met)
+    for where, item, gap in closed[len(closed) - len(recut):]:
+        print(f"  close    {where:8s} {item.name[:30]:32s} {gap:+d}f longer")
     silent = len([1 for t in doc.tracks for i in t.items]) - len(plan)
     print(f"  {silent} clips need no move")
     doc.set_end(frames(delta_at(spans, when(doc.end_frame))[0]))
@@ -214,7 +351,7 @@ def conform_one(resolve, project, timeline, spans, args, work):
         timeline.SetName(name)
         die(f"{name!r}: Resolve refused to import the conformed timeline")
 
-    faults = check(before, fingerprint(project, fresh, timeline), doc, moves, closed)
+    faults = check(before, fingerprint(project, fresh, timeline), doc, dropped)
     picture = ""
     if not faults and args.verify == "frames":
         sample = sorted({f for f in (frames(when(0) + 20), doc.end_frame // 3,
@@ -286,16 +423,18 @@ def close_gaps(doc, met):
     return closed
 
 
-def check(before, after, doc, moves, closed):
-    """The conformed timeline against the plan: every clip where it was asked to
-    go, with the grade and the reframe it had."""
-    grew = {id(item): gap for _, item, gap in closed}
-    want = []
-    for row, item in zip(before, doc.items):
-        shift, grow = moves[id(item)]
-        grow += grew.get(id(item), 0)
-        want.append(dict(row, start=row["start"] + shift,
-                         end=row["end"] + shift + grow))
+def check(before, after, doc, dropped):
+    """The conformed timeline against the plan.
+
+    Where each clip was asked to end up is read back off the document the write
+    was made from -- every move, every gap closed and every re-cut has already
+    been applied to it -- and the grade, the reframe and the source in-point
+    come from the fingerprint taken before anything moved. So this catches
+    Resolve putting a clip somewhere else, losing a grade, or quietly dropping
+    a clip, which is what the round trip can do and the arithmetic cannot.
+    """
+    want = [dict(row, start=item.start.frames, end=item.end)
+            for row, item in zip(before, doc.items) if item not in dropped]
     return compare(want, [], after)
 
 
@@ -305,6 +444,10 @@ def main():
     ap.add_argument("document", help="the .arc mix the timelines are cut against")
     ap.add_argument("--since", required=True,
                     help="the revision they were last in sync with (a sha, a tag, HEAD~1)")
+    ap.add_argument("--until",
+                    help="conform TO this revision rather than to the working "
+                         "tree -- which is how a conform run from the wrong "
+                         "baseline is corrected without undoing it first")
     ap.add_argument("--media", help="the rendered mix's name in the media pool "
                                     "(default: the one clip every timeline shares)")
     ap.add_argument("--track", default="AB",
@@ -318,6 +461,12 @@ def main():
                          "reframing only")
     ap.add_argument("--settle", type=float, default=2.5,
                     help="seconds to let the viewer catch up per frame")
+    ap.add_argument("--recut-orphans", action="store_true",
+                    help="where picture is cut over a piece of the comp that is "
+                         "gone, and the clip before it is the take you now hear, "
+                         "run that clip on through instead of leaving the wrong "
+                         "take on screen. This REMOVES a cut somebody made, so it "
+                         "is a flag and not a default")
     ap.add_argument("--keep-original", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
@@ -325,14 +474,22 @@ def main():
     work = tempfile.mkdtemp(prefix="resolve-conform-")
     try:
         old = at_revision(args.document, args.since, work)
-        spans, dropped, added = clock_deltas(arc_items(old, args.track),
-                                             arc_items(args.document, args.track))
+        new = at_revision(args.document, args.until, work) if args.until else args.document
+        if args.until and open(old, "rb").read() == open(new, "rb").read():
+            die(f"{args.since} and {args.until} are the same document, so there "
+                f"is nothing to conform between them")
+        spans, gone, added = clock_deltas(arc_items(old, args.track),
+                                          arc_items(new, args.track))
         moved = [s for s in spans if abs(s["delta"]) > 1e-6]
         print(f"{os.path.basename(args.document)}: {len(spans)} items matched "
-              f"across {args.since}..working tree, {len(moved)} with a clock that moved")
-        if dropped or added:
-            print(f"  NOTE    {dropped} items are gone and {added} are new since "
-                  f"{args.since}; picture over those is positioned by its neighbours")
+              f"across {args.since}..{args.until or 'working tree'}, "
+              f"{len(moved)} with a clock that moved")
+        for dead in gone:
+            print(f"  GONE    the {dead['name']} at {dead['at']:.1f}-"
+                  f"{dead['at'] + dead['len']:.1f}s is not in the mix any more; "
+                  f"picture cut over it is listed per timeline as ORPHAN")
+        if added:
+            print(f"  NOTE    {added} items are new since {args.since}")
         for span in moved[:1] + ([moved[-1]] if len(moved) > 1 else []):
             print(f"    {span['name']:16s} at {span['at']:8.3f}s  clock {span['delta']:+.3f}s")
         if not moved:
@@ -356,7 +513,7 @@ def main():
             if not chosen:
                 die(f"no timeline holds {args.media!r}")
 
-        results = [conform_one(resolve, project, t, spans, args, work) for t in chosen]
+        results = [conform_one(resolve, project, t, spans, gone, args, work) for t in chosen]
         if args.dry_run:
             print("\ndry run: nothing was changed")
             return

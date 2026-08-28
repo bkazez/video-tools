@@ -141,7 +141,19 @@ somebody has to fill. A gap opening where the clips did **not** meet before is a
 overlay track's own spacing, and is left alone.
 
 `--since` is the revision the timelines were last cut against — the recording
-project is in git, so a sha, a tag, or `HEAD~1`.
+project is in git, so a sha, a tag, or `HEAD~1`. **Get it right**: run from a
+revision that already contains part of the change and everything before it is
+silently never applied, and every check here still passes, because they all ask
+whether the timeline matches the plan rather than whether the plan was right.
+Where the video was cut to a REAPER edit, the baseline is the commit that
+imported it. `--until` conforms to a revision rather than to the working tree,
+which is how a run from the wrong baseline is corrected without undoing it.
+
+**A re-comp can delete a piece of the edit, and no move fixes that.** Where the
+picture is cut over an item that is gone, it is showing a take that is not in
+the mix any more — reported as `ORPHAN`, with the take that took its place.
+`--recut-orphans` runs the clip before it on through, when that clip is the take
+you now hear; it removes a cut somebody made, so it is a flag and not a default.
 
 ### The round trip underneath, and why it is DRT
 
