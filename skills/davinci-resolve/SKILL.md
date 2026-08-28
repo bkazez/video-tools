@@ -97,10 +97,22 @@ take the SeqContainer whose tracks name it as `<Sequence>`. A clip carries
 sub-frame remainder. Element names like `ListMgt::LmVersionTable` are not
 well-formed XML, so edit the text by span rather than re-serialising a parse.
 
-`video-tools/lib/drt.py` does all of that and `bin/resolve-ripple` is the tool:
-inserting or removing time at a point, across every timeline built on a media
-item, verifying each one and refusing to replace an original that did not come
-back whole.
+`video-tools/lib/drt.py` does all of that. `bin/resolve-conform` is the tool
+that should usually be reached for — it reads what moved out of the arc document
+the mix comes from and needs no numbers — and `bin/resolve-ripple` is the same
+machinery driven by hand, for audio that is not an arc project.
+
+**Conforming picture to a mix is a per-TAKE question, not a per-timeline one.**
+An arc item carries `at` (where it sits in the mix) and `soffs` (where it starts
+in its take); the difference is that take's clock, and the picture follows the
+clock. On the 2026-08-27 Polyphemus re-comp the mix grew exactly 1.000 s while
+the take at the join started 0.181 s earlier in its own source, so items before
+the join moved 0 and items after moved 1.000 — a single ripple of "the mix got a
+second longer" is wrong at the join and right nowhere that matters. A camera
+clip then follows the item it spends most of its time over rather than the one
+under its first frame, which for a clip cut a little early is the take before
+it. And the second of picture comes from lengthening the clip that used to meet
+the one that moved, out of its own source -- never from a hole.
 
 Two more things the import does that are worth knowing: it takes the **filename**
 as the timeline's name (not the `<ProjectName>` inside), and it writes the

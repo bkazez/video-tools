@@ -44,137 +44,16 @@ originals in place (`--keep-original` leaves them beside, renamed).
 """
 import argparse
 import os
-import re
 import shutil
 import sys
 import tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
-sys.path.append("/Library/Application Support/Blackmagic Design/DaVinci Resolve/"
-                "Developer/Scripting/Modules")
-os.environ.setdefault(
-    "RESOLVE_SCRIPT_LIB",
-    "/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/Libraries/"
-    "Fusion/fusionscript.so")
 
 import drt as drtlib
-
-TOOL = "resolve-ripple"
-REFRAME = ("ZoomX", "ZoomY", "Pan", "Tilt", "RotationAngle", "AnchorPointX",
-           "AnchorPointY", "CropLeft", "CropRight", "CropTop", "CropBottom",
-           "Opacity", "FlipX", "FlipY")
-
-
-def die(message):
-    sys.exit(f"{TOOL}: {message}")
-
-
-def connect():
-    try:
-        import DaVinciResolveScript as dvr
-    except ImportError:
-        die("Resolve's scripting module is not on the path")
-    resolve = dvr.scriptapp("Resolve")
-    if not resolve:
-        die("Resolve is not running (open it, and set External scripting to Local)")
-    project = resolve.GetProjectManager().GetCurrentProject()
-    if not project:
-        die("no project is open")
-    return resolve, project
-
-
-def timelines(project):
-    return [project.GetTimelineByIndex(i) for i in range(1, project.GetTimelineCount() + 1)]
-
-
-def parse_time(text, fps, what):
-    """`00:01:06:20`, `1:07.8`, `67.8`, `67.8s` or `1670f`, as whole frames."""
-    text = text.strip()
-    sign = -1 if text.startswith("-") else 1
-    text = text.lstrip("+-")
-    if text.endswith("f"):
-        return sign * int(round(float(text[:-1])))
-    if re.fullmatch(r"\d+:\d\d:\d\d:\d\d", text):
-        h, m, s, f = (int(p) for p in text.split(":"))
-        return sign * int(round(((h * 60 + m) * 60 + s) * fps + f))
-    if re.fullmatch(r"\d+:\d\d(\.\d+)?", text):
-        m, s = text.split(":")
-        return sign * int(round((int(m) * 60 + float(s)) * fps))
-    try:
-        return sign * int(round(float(text.rstrip("s")) * fps))
-    except ValueError:
-        die(f"{what} {text!r} is not a timecode, a number of seconds or a frame count")
-
-
-def timecode(frame, fps):
-    frame = int(round(frame))
-    per_minute, per_hour = int(round(fps)) * 60, int(round(fps)) * 3600
-    h, rest = divmod(frame, per_hour)
-    m, rest = divmod(rest, per_minute)
-    s, f = divmod(rest, int(round(fps)))
-    return f"{h:02d}:{m:02d}:{s:02d}:{f:02d}"
-
-
-def api_items(timeline):
-    """Every item, in the order lib/drt.py reads them, so the two can be paired."""
-    out = []
-    for kind in ("video", "audio", "subtitle"):
-        for track in range(1, timeline.GetTrackCount(kind) + 1):
-            for item in timeline.GetItemListInTrack(kind, track) or []:
-                out.append((f"{kind}{track}", item))
-    return out
-
-
-def fingerprint(project, timeline, under):
-    """Every item of `timeline`, read while `under` is the current timeline.
-
-    `under` is not decoration. `TimelineItem.GetProperty("Pan")` and `"Tilt"`
-    are reported in the CURRENT timeline's pixel space rather than the item's
-    own, so the same clip reads 175.68 with a 1920x1080 timeline open and 98.82
-    with a 1080x1920 one -- 16/9 apart, on a clip nobody touched. Comparing a
-    reading taken before an edit against one taken after it, with a different
-    timeline open in between, therefore reports every reframe in the project as
-    lost. Measured 2026-08-27; both readings come back identical once the
-    current timeline is pinned.
-    """
-    project.SetCurrentTimeline(under)
-    origin = timeline.GetStartFrame()
-    rows = []
-    for where, item in api_items(timeline):
-        row = {"where": where, "name": item.GetName(),
-               "start": item.GetStart() - origin, "end": item.GetEnd() - origin,
-               "src_in": item.GetLeftOffset()}
-        if where.startswith("video"):
-            try:
-                row["nodes"] = item.GetNumNodes()
-            except Exception:
-                row["nodes"] = None
-            for prop in REFRAME:
-                row[prop] = item.GetProperty(prop)
-        rows.append(row)
-    return rows
-
-
-def drt_origin(timeline, doc):
-    """How the DRT counts frames against how the API does, measured not assumed."""
-    pairs = list(zip(api_items(timeline), doc.items))
-    if len(pairs) != len(doc.items) or len(doc.items) != len(api_items(timeline)):
-        die(f"{timeline.GetName()!r}: the export holds {len(doc.items)} items and "
-            f"the timeline {len(api_items(timeline))}; refusing to guess which is which")
-    offsets = {api.GetStart() - item.start.frames for (_, api), item in pairs}
-    if len(offsets) != 1:
-        die(f"{timeline.GetName()!r}: the export and the timeline disagree about "
-            f"where clips are (offsets {sorted(offsets)}); refusing to edit it")
-    # The second reading. An empty <In/> is read as frame 0 and a clone's source
-    # in-point is arithmetic on it, so this is where that reading is checked.
-    wrong = [(api.GetName(), api.GetLeftOffset(), item.src_in.frames)
-             for (_, api), item in pairs
-             if item.src_in is not None and api.GetLeftOffset() != item.src_in.frames]
-    if wrong:
-        die(f"{timeline.GetName()!r}: the export and the timeline disagree about "
-            f"source in-points, first {wrong[0]}; refusing to edit it")
-    return offsets.pop()
-
+from resolve import (REFRAME, compare, connect, die, drt_origin, fingerprint,
+                     frame_check, mergeable, parse_time, planned, timecode,
+                     timelines)
 
 def anchor(timeline, doc, media, at_source, fps):
     """The point, on THIS timeline, of `at_source` in `media`'s own frames."""
@@ -458,8 +337,9 @@ def ripple_one(resolve, project, timeline, at, by, args, work):
         was_end = doc.end_frame - by
         sample = sorted({f for f in (at_doc // 3, at_doc + 100, was_end - 100)
                          if 0 <= f < was_end})
-        matches, blind = frame_check(resolve, project, timeline, fresh,
-                                     at_doc, by, sample, args.settle)
+        matches, blind = frame_check(
+            resolve, project, timeline, fresh,
+            {f: (by if f >= at_doc else 0) for f in sample}, args.settle)
         for frame, match, floor in matches:
             if match > max(2 * floor, 2.0):
                 faults.append(

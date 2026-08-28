@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The parts of bin/resolve-ripple that decide things, without Resolve running.
+"""The parts of lib/resolve.py that decide things, without Resolve running.
 
     python3 tests/test_resolve_ripple.py
 
@@ -11,17 +11,11 @@ be worse than no check -- these cases hand it a result with a grade flattened, a
 reframe reset, a clip left behind and a source in-point moved, and require it to
 say so.
 """
-import importlib.machinery
-import importlib.util
 import os
 import sys
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(HERE, "..", "lib"))
-LOADER = importlib.machinery.SourceFileLoader(
-    "resolve_ripple", os.path.join(HERE, "..", "bin", "resolve-ripple"))
-RR = importlib.util.module_from_spec(importlib.util.spec_from_loader("resolve_ripple", LOADER))
-LOADER.exec_module(RR)
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
+import resolve as RR
 
 PASSED = FAILED = 0
 

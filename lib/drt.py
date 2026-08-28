@@ -386,6 +386,23 @@ class Timeline:
         tail = tail[:m.start(1)] + grown + tail[m.end(1):]
         self.members[folder] = (head + sep + tail).encode("utf-8")
 
+    def move(self, item, start=None, duration=None, src_in=None):
+        """Put one item somewhere else. The unit a conform is built out of."""
+        if start is not None:
+            self._set(item.start, start)
+        if duration is not None:
+            if duration < 1:
+                raise DrtError(f"{item.name!r} would be {duration} frames long")
+            self._set(item.duration, duration)
+        if src_in is not None:
+            if item.src_in is None:
+                raise DrtError(f"{item.name!r} has no source in-point to set")
+            self._set(item.src_in, src_in)
+
+    def set_end(self, by):
+        """Record that the timeline itself got `by` frames longer or shorter."""
+        self._grow_media_extents(by)
+
     def rejoin(self, pairs):
         """Merge each named item with the one after it, and say what it merged.
 

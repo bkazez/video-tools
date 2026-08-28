@@ -21,7 +21,8 @@ Everything takes paths as arguments; nothing is specific to one session.
 | `bin/build-grade-lut` | a grade as a .cube from control points: white balance, a monotone tone curve, saturation — and the slope table that says what it costs in grain |
 | `bin/resolve-set-grade` | that grade applied — a LUT and/or an ASC CDL on node 1 of selected timelines |
 | `bin/resolve-audio-check` | whether Resolve's playback is clicking, per page — it is the Color page, and it is 256 samples of digital zero |
-| `bin/resolve-ripple` | a second of room inserted (or taken out) at a point, on every timeline built on a mix that changed length — with the grades and the reframing still on |
+| `bin/resolve-conform` | every video timeline put back in sync with an arc mix that has been re-comped, working out from arc's own document what moved and by how much |
+| `bin/resolve-ripple` | time inserted or taken out at a point you name, when there is no arc document to read — the manual half of the same machinery |
 | `bin/camera-card-check` | every card you insert, checked against that profile automatically, with a notification — `--install-agent` |
 
 `sony-clip-info --expect` is the pre-shoot check: assert bit depth, chroma, slow
@@ -109,54 +110,80 @@ row, so a still and a frame of the film cannot disagree about where the glass is
 
 ## Conforming picture to a mix that changed length
 
-A mix comes back a second longer in the middle, and every picture edit built on
-it needs a second of room at that point. Resolve can do that by hand and cannot
-do it by script — `TimelineItem` has no `SetStart`, so the API cannot move a
-clip — and the obvious way round it, exporting the timeline and importing it
-back, is where the grades go.
+A mix is re-comped — a join moves, a take runs longer, a passage becomes one
+take through — and every video timeline cut against the old render is out of
+sync. The question a person cannot answer from a waveform, and arc can answer
+exactly, is *where* and *by how much*.
 
 ```bash
-resolve-ripple --media "Polyphemus video soundtrack.wav" --at 1:07.8 --by 1s --dry-run
-resolve-ripple --media "Polyphemus video soundtrack.wav" --at 1:07.8 --by 1s
+resolve-conform "Polyphemus mix.arc" --since HEAD~1 --dry-run
+resolve-conform "Polyphemus mix.arc" --since HEAD~1
 ```
 
-`--at` is a point in **the mix's own time** — the time you gave `arc ripple` —
-and each timeline holds that mix at its own offset, so the per-timeline
-positions are worked out rather than tabulated by hand. Every timeline holding
-that media is conformed, the media is reloaded from disk first, and the mix's
-own clip is the one that gets longer.
+**It is not one number, and that is the whole point.** arc's document says, per
+item, `at` (where it sits in the mix) and `soffs` (where it starts in its take);
+the difference is that take's own clock against the mix, and the clock is what
+the picture follows. On the 2026-08-27 Polyphemus re-comp the mix grew exactly
+1.000 s while the take at the join started 0.181 s earlier in its own source —
+items 0–7 had a clock delta of 0 and items 8–30 had 1.000. A single ripple would
+have been wrong at the join and right nowhere it mattered.
 
-It round-trips through **DRT**, which is Resolve's own timeline format rather
-than an interchange one, and that is the whole difference. Measured 2026-08-27
-on the `Polyphemus Horizontal` timeline (83 items, 3-node grades, a 3.16×
-vertical reframe):
+So each clip is moved by the delta of the take it is showing:
+
+| clip | what happens |
+|---|---|
+| a camera clip | **shifts** by the delta of the arc item it spends most of its time over, keeping its length — its own cuts are somebody's edit |
+| the mix, and full-length overlays | **stretch**: the start moves by the delta where they start, the end by the delta where they end |
+| two clips that used to meet | the first is **lengthened out of its own source** to still meet the second |
+
+That last row is where the extra second of picture comes from, instead of a hole
+somebody has to fill. A gap opening where the clips did **not** meet before is an
+overlay track's own spacing, and is left alone.
+
+`--since` is the revision the timelines were last cut against — the recording
+project is in git, so a sha, a tag, or `HEAD~1`.
+
+### The round trip underneath, and why it is DRT
+
+Resolve cannot move a clip by script: `TimelineItem` has no `SetStart`. So the
+edit leaves as a file and comes back, and which file decides whether the grades
+survive. Measured 2026-08-27 on `Polyphemus Horizontal` (83 items, 3-node
+grades, a 3.16× vertical reframe):
 
 | round trip | cuts | grades | reframes | picture |
 |---|---|---|---|---|
 | OTIO | 70/70 | 31/70 | 49/70 | mean 37.8–91.0 off |
 | DRT | 83/83 | 83/83 | 83/83 | mean 3.25 off, against a 3.2 same-frame-twice floor |
 
-Every run re-checks that on its own material: it compares the imported timeline
-against the plan it made, then renders matched frames out of both timelines
-against a floor measured from the exporter's own repeatability — and it also
-compares against a frame a second away, so a point that cannot tell those apart
-is reported as having proved nothing rather than counted as a pass. A timeline
-that fails is left beside the original as `… (rippled, UNVERIFIED)` and the
-original is not touched.
+DRT is Resolve's own timeline format rather than an interchange one, so a grade
+and a reframe have somewhere to go. Every run re-checks that on its own
+material: it compares the imported timeline against the plan it made, then
+renders matched frames out of both timelines against a floor measured from the
+still exporter's own repeatability — and beside each one a frame a second away,
+so a point that cannot tell two pictures apart is reported as having proved
+nothing rather than counted as a pass. A timeline that fails is left beside the
+original as `… (UNVERIFIED)` and the original is not touched.
 
-The one case with no right default is a clip the point falls **inside**:
+### When there is no document to read
 
-| `--straddle` | what the clip does |
-|---|---|
-| `split` (default) | cut at the point, the right half moves — a faithful ripple, leaving a real hole to fill |
-| `repeat` | as split, but the left half runs on into the hole, so it is covered by footage that is really there and the shot repeats |
-| `extend` | let it run longer |
+`bin/resolve-ripple` is the same machinery driven by hand — a point and an
+amount you supply — for a timeline whose audio is not an arc project:
 
-Stills always extend: there is nothing in one to cut at, and a hole in an
-overlay is never what was meant.
+```bash
+resolve-ripple --media "soundtrack.wav" --at 1:07.8 --by 1s --dry-run
+resolve-ripple --timeline "WDN Edit" --at 00:01:06:20 --by -25f
+```
 
-`lib/drt.py` is the file format on its own — read a `.drt`, move things, write
-it back — and `tests/test_drt.py` exercises it on an archive built in the test.
+With `--media`, `--at` is a point in the media's own time and each timeline's
+position is worked out from its own offset into it. A clip the point falls
+inside is the one case with no right default: `--straddle split` (default) cuts
+it and leaves a real hole, `repeat` covers the hole with the shot running on,
+`extend` lets it run longer. Stills always extend. `--by -N` at the point `--by
++N` was given undoes it exactly, closing the cut it made.
+
+`lib/drt.py` is the file format on its own, `lib/resolve.py` the Resolve side,
+and `tests/test_drt.py`, `tests/test_resolve_ripple.py` and
+`tests/test_conform.py` exercise all three without Resolve running.
 
 ## EDL and OTIO
 
@@ -181,6 +208,6 @@ Pyramix XML → Reaper multitrack: set the edit cursor in Reaper, run
 ## Requirements
 
 `ffmpeg`/`ffprobe` on PATH, `numpy`, `pyyaml`, and `pillow` for
-`resolve-ripple`'s picture check. `build-resolve-project`, `resolve-ripple` and
-the other `resolve-*` tools need DaVinci Resolve running with External scripting
-set to Local.
+the picture checks. `build-resolve-project` and the other `resolve-*` tools need
+DaVinci Resolve running with External scripting set to Local; `resolve-conform`
+also needs `arc` on the path and the recording project in git.

@@ -1,0 +1,373 @@
+#!/usr/bin/env python3
+"""Bring Resolve timelines back into sync with an arc mix that has been edited.
+
+    resolve-conform "Polyphemus mix.arc" --since HEAD~1 --dry-run
+    resolve-conform "Polyphemus mix.arc" --since 1772d97
+
+The mix is re-comped: a join moves, a take runs longer, a passage is replaced by
+one take through. Every video timeline cut against the old render is now out of
+sync, and by a different amount in different places -- so the question a person
+cannot answer from a waveform, and arc can answer exactly, is WHERE the edit is
+and HOW MUCH each stretch of the piece moved.
+
+It is not one number. arc's document says, per item, `at` (where it sits in the
+mix) and `soffs` (where it starts in its take), and the difference between them
+is that take's own clock against the mix. What the picture has to follow is the
+CLOCK, not the timeline: a take whose clock did not move needs no picture
+change however much later the mix ends, and a take whose clock moved 1.181 s
+needs its picture moved 1.181 s even if the mix as a whole grew 1.000. On the
+2026-08-27 Polyphemus re-comp, items 0-7 had a clock delta of 0 and items 8-30
+had 1.000, with a join moving 0.82 s in between -- one ripple would have been
+wrong at the join and right nowhere it mattered.
+
+So this reads both revisions of the document, works the clock delta out per
+item, and applies it per clip:
+
+  a camera clip SHIFTS by the delta of the arc item it spends most of its time
+  over -- the take it is showing -- and keeps its length, because its own cuts
+  are somebody's edit and are not this tool's to move;
+
+  the soundtrack clip and any full-length overlay STRETCH: their start moves by
+  the delta where they start and their end by the delta where they end, which
+  for the soundtrack is exactly "it is the new mix" and for a grid or a
+  safe-area overlay is "cover the whole thing, as before".
+
+Then a gap or an overlap left where two clips USED to meet is closed by
+lengthening or shortening the one before it -- which is where the second of
+footage comes from, rather than from a hole somebody has to fill. A gap
+somewhere the clips did not meet before is an overlay track's own spacing and
+is left alone.
+
+`--since` is the revision the Resolve timelines were last cut against. The
+recording project is in git, so it is a sha, a tag, or `HEAD~1`.
+"""
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
+
+import drt as drtlib
+from resolve import (REFRAME, compare, connect, die, drt_origin, fingerprint,
+                     frame_check, timecode, timelines)
+
+ARC = os.path.expanduser("~/bin/arc")
+ITEMS = ("SELECT i.id, i.name, i.at, i.len, i.soffs, t.name AS track "
+         "FROM item i JOIN track t ON t.id = i.track_id ORDER BY i.at")
+
+
+def arc_items(document, track):
+    out = subprocess.run([ARC, "query", document, ITEMS],
+                         capture_output=True, text=True)
+    if out.returncode:
+        die(f"arc query failed on {document}: {out.stderr.strip().splitlines()[-1:]}")
+    rows = json.loads(out.stdout)["rows"]
+    rows = [r for r in rows if r["track"] == track]
+    if not rows:
+        die(f"{document} has no items on track {track!r}")
+    return rows
+
+
+def at_revision(document, revision, work):
+    """The document as it was, checked out of the recording project's git."""
+    folder, filename = os.path.split(os.path.abspath(document))
+    out = subprocess.run(["git", "-C", folder, "show", f"{revision}:./{filename}"],
+                         capture_output=True)
+    if out.returncode:
+        die(f"git show {revision}:{filename} failed -- is the project in git, "
+            f"and is {revision} a revision of it?")
+    path = os.path.join(work, f"was-{filename}")
+    with open(path, "wb") as fh:
+        fh.write(out.stdout)
+    return path
+
+
+def clock_deltas(was, now):
+    """Per arc item: where it used to sit in the mix, and how far its take's own
+    clock moved. Matched by the permanent id each item carries, so a re-comp
+    that renames or reorders nothing still lines up."""
+    new = {r["id"]: r for r in now}
+    spans = []
+    for old in was:
+        fresh = new.get(old["id"])
+        if fresh is None:
+            continue
+        spans.append({
+            "name": old["name"], "at": old["at"], "len": old["len"],
+            "delta": (fresh["at"] - fresh["soffs"]) - (old["at"] - old["soffs"])})
+    spans.sort(key=lambda s: s["at"])
+    dropped = len(was) - len(spans)
+    added = len(now) - len(spans)
+    return spans, dropped, added
+
+
+def delta_at(spans, when):
+    """The clock delta in force at a moment of the OLD mix. Later item wins where
+    two overlap, which is what a crossfade means once it is through."""
+    hit = None
+    for span in spans:
+        if span["at"] <= when < span["at"] + span["len"]:
+            hit = span
+    if hit:
+        return hit["delta"], hit["name"]
+    before = [s for s in spans if s["at"] + s["len"] <= when]
+    if before:
+        return before[-1]["delta"], before[-1]["name"] + " (after it)"
+    return spans[0]["delta"], spans[0]["name"] + " (before it)"
+
+
+def majority(spans, start, finish):
+    """The arc item a clip spends most of its time over: the take it is showing."""
+    best, best_overlap = None, 0.0
+    for span in spans:
+        overlap = min(finish, span["at"] + span["len"]) - max(start, span["at"])
+        if overlap > best_overlap:
+            best, best_overlap = span, overlap
+    if best is None:
+        return delta_at(spans, start)
+    return best["delta"], best["name"]
+
+
+def conform_one(resolve, project, timeline, spans, args, work):
+    name = timeline.GetName()
+    fps = float(timeline.GetSetting("timelineFrameRate"))
+    export = os.path.join(work, "export.drt")
+    if not timeline.Export(export, resolve.EXPORT_DRT):
+        die(f"{name!r}: Resolve refused to export the timeline")
+    doc = drtlib.Timeline(export)
+    origin = drt_origin(timeline, doc)
+
+    anchors = doc.clip_named(args.media)
+    if not anchors:
+        return None
+    if len(anchors) > 1:
+        die(f"{name!r} holds {len(anchors)} clips of {args.media!r}; "
+            f"conform needs one, so the mix's clock is unambiguous")
+    mix = anchors[0]
+
+    def when(frame):                      # timeline frame -> seconds into the mix
+        return (frame - mix.start.frames + mix.src_in.frames) / fps
+
+    def frames(seconds):
+        return int(round(seconds * fps))
+
+    before = fingerprint(project, timeline, timeline)
+    met = abutting(doc)
+    plan, moves = [], {}
+    for track in doc.tracks:
+        where = f"{track.kind}{track.index}"
+        for item in track.items:
+            start, finish = when(item.start.frames), when(item.end)
+            if item is mix or item.is_still:
+                head, take = delta_at(spans, start), None
+                tail = delta_at(spans, max(start, finish - 1 / fps))
+                shift, grow = frames(head[0]), frames(tail[0]) - frames(head[0])
+                kind = "stretch"
+                take = f"{head[1]} -> {tail[1]}" if tail[1] != head[1] else head[1]
+            else:
+                delta, take = majority(spans, start, finish)
+                shift, grow, kind = frames(delta), 0, "shift"
+            moves[id(item)] = (shift, grow)
+            if shift or grow:
+                plan.append((where, item, kind, take, shift, grow, start))
+
+    print(f"\n{name}")
+    if not plan:
+        print("  already in sync with the document")
+        return None
+    for where, item, kind, take, shift, grow, start in plan:
+        print(f"  {kind:8s} {where:8s} {item.name[:30]:32s} at {timecode(item.start.frames + origin, fps):>11s}"
+              f"  {shift:+4d}f" + (f" {grow:+4d} longer" if grow else "        ")
+              + f"   over {take}")
+    # Applied before the dry run returns, not after: closing the gaps is where
+    # the second of footage comes from instead of a hole, and a dry run that did
+    # not show it would be describing a different edit from the one that runs.
+    for track in doc.tracks:
+        for item in track.items:
+            shift, grow = moves[id(item)]
+            if shift or grow:
+                doc.move(item, start=item.start.frames + shift,
+                         duration=item.duration.frames + grow)
+    closed = close_gaps(doc, met)
+    for where, item, gap in closed:
+        print(f"  close    {where:8s} {item.name[:30]:32s} {gap:+d}f longer, so it "
+              f"still meets the clip it used to meet")
+    silent = len([1 for t in doc.tracks for i in t.items]) - len(plan)
+    print(f"  {silent} clips need no move")
+    doc.set_end(frames(delta_at(spans, when(doc.end_frame))[0]))
+
+    if args.dry_run:
+        return None
+
+    edited = os.path.join(work, f"{name}.drt")
+    doc.rename(name)
+    doc.write(edited)
+    stash = f"{name} (before conform)"
+    if not timeline.SetName(stash):
+        die(f"{name!r}: could not rename the original out of the way")
+    fresh = project.GetMediaPool().ImportTimelineFromFile(edited)
+    if not fresh:
+        timeline.SetName(name)
+        die(f"{name!r}: Resolve refused to import the conformed timeline")
+
+    faults = check(before, fingerprint(project, fresh, timeline), doc, moves, closed)
+    picture = ""
+    if not faults and args.verify == "frames":
+        sample = sorted({f for f in (frames(when(0) + 20), doc.end_frame // 3,
+                                     doc.end_frame - frames(20)) if f > 0})
+        shifts = {f: frames(delta_at(spans, when(f))[0]) for f in sample}
+        matches, blind = frame_check(resolve, project, timeline, fresh,
+                                     shifts, args.settle)
+        for frame, match, floor in matches:
+            if match > max(2 * floor, 2.0):
+                faults.append(
+                    f"frame {frame} renders differently after the move: mean "
+                    f"{match:.2f} against a same-frame-twice floor of {floor:.2f}")
+        for frame in blind:
+            print(f"  NOTE    frame {frame} looks the same as one a second later, "
+                  f"so matching there proves nothing")
+        good = [m for f, m, _ in matches if f not in blind]
+        picture = (f"; picture matched to a mean of {max(good):.2f} at "
+                   f"{len(good)}/{len(matches)} points" if good else
+                   "; no sampled frame could tell a second apart, so the picture "
+                   "check proved nothing")
+    if faults:
+        unverified = f"{name} (conformed, UNVERIFIED)"
+        fresh.SetName(unverified)
+        timeline.SetName(name)
+        print(f"  REFUSED to replace {name!r}. The edit is beside it as "
+              f"{unverified!r}:")
+        for fault in faults[:10]:
+            print(f"    {fault}")
+        return False
+    print(f"  verified: {len(before)} items, grades and reframing intact" + picture)
+    if args.keep_original:
+        print(f"  kept the original as {stash!r}")
+    else:
+        project.GetMediaPool().DeleteTimelines([timeline])
+    return True
+
+
+def abutting(doc):
+    """The neighbours that MEET, before anything moves, as the items themselves.
+
+    Not a set of names and frames: the names in a .drt drop the multicam angle,
+    so two different angles of one take are not distinguishable by name, and
+    every frame in the key is about to change. The items are moved in place, so
+    holding them is what survives.
+
+    And not `joins` from lib/resolve.py, which asks whether two pieces are one
+    clip cut in two -- a question about a grade. This asks only whether there
+    was nothing between them, which is what makes a gap opening here this tool's
+    to close, and a gap opening anywhere else an overlay track's own spacing.
+    """
+    return [(f"{track.kind}{track.index}", left, right)
+            for track in doc.tracks
+            for left, right in zip(track.items, track.items[1:])
+            if right.start.frames == left.end]
+
+
+def close_gaps(doc, met):
+    """Two clips that used to meet and no longer do: lengthen or shorten the
+    first, out of its own source. This is where the second of footage comes from
+    instead of a hole -- and where a shot that has run out will say so, because
+    lengthening past the end of the source is what Resolve refuses."""
+    closed = []
+    for where, left, right in met:
+        gap = right.start.frames - left.end
+        if gap == 0:
+            continue
+        doc.move(left, duration=left.duration.frames + gap)
+        closed.append((where, left, gap))
+    return closed
+
+
+def check(before, after, doc, moves, closed):
+    """The conformed timeline against the plan: every clip where it was asked to
+    go, with the grade and the reframe it had."""
+    grew = {id(item): gap for _, item, gap in closed}
+    want = []
+    for row, item in zip(before, doc.items):
+        shift, grow = moves[id(item)]
+        grow += grew.get(id(item), 0)
+        want.append(dict(row, start=row["start"] + shift,
+                         end=row["end"] + shift + grow))
+    return compare(want, [], after)
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("document", help="the .arc mix the timelines are cut against")
+    ap.add_argument("--since", required=True,
+                    help="the revision they were last in sync with (a sha, a tag, HEAD~1)")
+    ap.add_argument("--media", help="the rendered mix's name in the media pool "
+                                    "(default: the one clip every timeline shares)")
+    ap.add_argument("--track", default="AB",
+                    help="the arc track whose comp the picture follows (default AB)")
+    ap.add_argument("--timeline", action="append", default=[],
+                    help="a timeline by name; repeatable. Default: every timeline "
+                         "holding the mix")
+    ap.add_argument("--verify", default="frames", choices=("frames", "structure"),
+                    help="frames also renders matched stills out of both timelines "
+                         "(default); structure checks positions, grades and "
+                         "reframing only")
+    ap.add_argument("--settle", type=float, default=2.5,
+                    help="seconds to let the viewer catch up per frame")
+    ap.add_argument("--keep-original", action="store_true")
+    ap.add_argument("--dry-run", action="store_true")
+    args = ap.parse_args()
+
+    work = tempfile.mkdtemp(prefix="resolve-conform-")
+    try:
+        old = at_revision(args.document, args.since, work)
+        spans, dropped, added = clock_deltas(arc_items(old, args.track),
+                                             arc_items(args.document, args.track))
+        moved = [s for s in spans if abs(s["delta"]) > 1e-6]
+        print(f"{os.path.basename(args.document)}: {len(spans)} items matched "
+              f"across {args.since}..working tree, {len(moved)} with a clock that moved")
+        if dropped or added:
+            print(f"  NOTE    {dropped} items are gone and {added} are new since "
+                  f"{args.since}; picture over those is positioned by its neighbours")
+        for span in moved[:1] + ([moved[-1]] if len(moved) > 1 else []):
+            print(f"    {span['name']:16s} at {span['at']:8.3f}s  clock {span['delta']:+.3f}s")
+        if not moved:
+            print("  nothing in the mix moved; the timelines are already in sync")
+            return
+
+        resolve, project = connect()
+        if not args.media:
+            args.media = os.path.splitext(os.path.basename(args.document))[0]
+        chosen = timelines(project)
+        if args.timeline:
+            known = {t.GetName(): t for t in chosen}
+            missing = [n for n in args.timeline if n not in known]
+            if missing:
+                die(f"no timeline named {', '.join(repr(n) for n in missing)}")
+            chosen = [known[n] for n in args.timeline]
+        else:
+            from resolve import api_items
+            chosen = [t for t in chosen
+                      if any(i.GetName() == args.media for _, i in api_items(t))]
+            if not chosen:
+                die(f"no timeline holds {args.media!r}")
+
+        results = [conform_one(resolve, project, t, spans, args, work) for t in chosen]
+        if args.dry_run:
+            print("\ndry run: nothing was changed")
+            return
+        resolve.GetProjectManager().SaveProject()
+        done = [r for r in results if r is not None]
+        print(f"\n{sum(1 for r in done if r)}/{len(done)} timelines conformed and saved")
+        if any(r is False for r in results):
+            sys.exit(1)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    main()
