@@ -318,17 +318,22 @@ class Timeline:
 
         report = {"moved": [], "extended": [], "split": [], "untouched": 0,
                   "at": at, "by": by, "was": {}}
+        # Taking time out removes the span [at, at - by). The first frame that
+        # SURVIVES is therefore `at - by`, not `at`, and it is what moves back to
+        # `at`. Getting this wrong makes `--by -N` at the point `--by +N` was
+        # given refuse to undo itself, which is the one call anybody makes twice.
+        edge = at if by > 0 else at - by
         for track in self.tracks:
             for item in list(track.items):
                 where = f"{track.kind}{track.index}"
                 report["was"][id(item)] = (item.start.frames, item.duration.frames)
-                if item.start.frames >= at:
-                    if by < 0 and item.start.frames < at - by:
-                        raise DrtError(
-                            f"removing {-by} frames at {at} would swallow "
-                            f"{item.name!r} on {where}")
+                if item.start.frames >= edge:
                     self._set(item.start, item.start.frames + by)
                     report["moved"].append((where, item))
+                elif at <= item.start.frames < edge:
+                    raise DrtError(
+                        f"removing {-by} frames at {at} would swallow "
+                        f"{item.name!r} on {where}")
                 elif item.start.frames < at < item.end:
                     mode = straddle
                     if item.name in extend:
@@ -380,6 +385,43 @@ class Timeline:
         grown = struct.pack("<dd", first, last + by / self.frame_rate).hex()
         tail = tail[:m.start(1)] + grown + tail[m.end(1):]
         self.members[folder] = (head + sep + tail).encode("utf-8")
+
+    def rejoin(self, pairs):
+        """Merge each named item with the one after it, and say what it merged.
+
+        `pairs` is (track key, start frame) of the LEFT item, decided by the
+        caller -- because what makes two pieces halves of one clip is that they
+        carry the same grade and the same reframe, and neither is legible here:
+        Resolve re-saves the grade blob on every export, so two halves that
+        render identically are never byte-identical, and the `<Name>` in a .drt
+        drops the multicam angle, so two different angles of one take look like
+        one clip. `bin/resolve-ripple` decides from the node count and the
+        reframing properties it has already read off the live timeline.
+
+        What IS checked here, and refused: that the two really do meet, in the
+        timeline and in the source. A merge over a gap or a jump would be a
+        silent edit.
+        """
+        merged = []
+        for track in self.tracks:
+            key = f"{track.kind}{track.index}"
+            for left, right in zip(track.items, track.items[1:]):
+                if (key, left.start.frames) not in pairs:
+                    continue
+                if left.src_in is None or right.src_in is None:
+                    raise DrtError(f"{left.name!r} on {key} has no source in-point "
+                                   f"to join along")
+                if right.start.frames != left.end:
+                    raise DrtError(f"{left.name!r} on {key} does not meet the clip "
+                                   f"after it at frame {left.end}")
+                if right.src_in.frames != left.src_in.frames + left.duration.frames:
+                    raise DrtError(f"{left.name!r} on {key} meets the clip after it "
+                                   f"in the timeline but jumps in the source")
+                self._set(left.duration, left.duration.frames + right.duration.frames)
+                start = self.text.rfind("\n", 0, right.element.start)
+                self._edits.append((start, right.element.end, ""))
+                merged.append((key, left))
+        return merged
 
     # -- writing ------------------------------------------------------------
 

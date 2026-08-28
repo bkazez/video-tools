@@ -85,36 +85,61 @@ def main():
             row("video1", "c.mov", 325, 425),
             row("video2", "grid.png", 0, 425),
             row("audio1", "mix.wav", 0, 425)]
-    check("a round trip that kept everything passes",
-          RR.compare(before, good, report, 150, 25), [])
+    want, expect_new = RR.planned(before, report, 150, 25)
+    check("the plan is the five items that survive plus the copied half",
+          (len(want), len(expect_new)), (5, 1))
+    verdict = lambda rows: RR.compare(want, expect_new, rows)
+    check("a round trip that kept everything passes", verdict(good), [])
 
     flattened = [dict(r) for r in good]
     flattened[2]["nodes"] = 1
     check("a grade flattened on the copied half is caught",
-          any("nodes" in f for f in RR.compare(before, flattened, report, 150, 25)), True)
+          any("nodes" in f for f in verdict(flattened)), True)
 
     reframed = [dict(r) for r in good]
     reframed[3]["ZoomX"] = "1.0000"
     check("a reframe reset is caught",
-          any("ZoomX" in f for f in RR.compare(before, reframed, report, 150, 25)), True)
+          any("ZoomX" in f for f in verdict(reframed)), True)
 
     moved = [dict(r) for r in good]
     moved[3]["start"] = 300
     check("a clip left where it was is caught",
-          any("c.mov" in f for f in RR.compare(before, moved, report, 150, 25)), True)
+          any("c.mov" in f for f in verdict(moved)), True)
 
     slipped = [dict(r) for r in good]
     slipped[2]["src_in"] = 500
     check("a source in-point that slipped is caught",
-          any("src_in" in f for f in RR.compare(before, slipped, report, 150, 25)), True)
+          any("src_in" in f for f in verdict(slipped)), True)
 
     check("a clip that did not come back at all is caught",
-          RR.compare(before, good[:-1], report, 150, 25) != [], True)
+          verdict(good[:-1]) != [], True)
 
     unextended = [dict(r) for r in good]
     unextended[5]["end"] = 400
     check("the media that should have got longer and did not is caught",
-          any("mix.wav" in f for f in RR.compare(before, unextended, report, 150, 25)), True)
+          any("mix.wav" in f for f in verdict(unextended)), True)
+
+    print("\nwhich pieces are one clip again")
+    joined = [row("video1", "b.mov", 100, 150, src_in=500),
+              row("video1", "b.mov", 150, 300, src_in=550)]
+    apart = [joined[0], dict(joined[1], start=175, end=325)]
+    check("halves this edit brought back together are joined",
+          len(RR.mergeable(apart, joined)), 1)
+    check("a through edit that was already there is left alone",
+          len(RR.mergeable(joined, joined)), 0)
+    mergeable = lambda rows: RR.mergeable(apart, rows)
+    check("halves that meet in the timeline and the source, with one grade",
+          len(mergeable(joined)), 1)
+    check("a gap between them is not a join",
+          len(mergeable([joined[0], dict(joined[1], start=160, end=310)])), 0)
+    check("a jump in the source is not a join",
+          len(mergeable([joined[0], dict(joined[1], src_in=900)])), 0)
+    check("a different grade is a cut somebody meant",
+          len(mergeable([joined[0], dict(joined[1], nodes=2)])), 0)
+    check("a different reframe is a cut somebody meant",
+          len(mergeable([joined[0], dict(joined[1], ZoomX="1.5")])), 0)
+    check("a different multicam angle is a cut somebody meant",
+          len(mergeable([joined[0], dict(joined[1], name="b.mov - Video 2")])), 0)
 
     print(f"\n{PASSED} ok, {FAILED} failed")
     return 1 if FAILED else 0

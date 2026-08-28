@@ -210,6 +210,44 @@ def reload_media(project, name):
         print(f"  reloaded {name}: {was} -> {now}")
 
 
+def joins(rows):
+    """Adjacent pieces that are one clip: same clip, meeting in the timeline and
+    running straight on in the source, with the same grade and the same reframe.
+    Anything less is a cut somebody made on purpose -- a multicam angle change
+    runs straight through the source too, and is told apart by the name, which
+    carries the angle."""
+    out = []
+    rows = sorted(rows, key=lambda r: (r["where"], r["start"]))
+    for left, right in zip(rows, rows[1:]):
+        if left["where"] != right["where"] or left["name"] != right["name"]:
+            continue
+        if right["start"] != left["end"]:
+            continue
+        if right["src_in"] != left["src_in"] + (left["end"] - left["start"]):
+            continue
+        if any(left.get(k) != right.get(k) for k in ("nodes", *REFRAME)):
+            continue
+        out.append((left, right))
+    return out
+
+
+def mergeable(before, rows):
+    """The joins THIS edit closed, and only those.
+
+    A timeline can already hold a through edit -- an overlay cut in two that
+    runs straight on, a clip somebody bladed and never moved -- and closing one
+    is an edit nobody asked for. It happened: an overlay's own join at frame 197
+    was silently merged away. So a pair only counts if it was not already a join
+    before, which is exactly what a ripple that gets undone leaves behind.
+    """
+    def name(pair):
+        left, right = pair
+        return (left["where"], left["name"], left["src_in"], right["src_in"])
+
+    was = {name(p) for p in joins(before)}
+    return [p for p in joins(rows) if name(p) not in was]
+
+
 def planned(before, report, at, by):
     """What the fingerprint MUST read afterwards, derived from the plan alone.
 
@@ -237,12 +275,12 @@ def planned(before, report, at, by):
     return want, expect_new
 
 
-def compare(before, after, report, at, by):
+def compare(want, expect_new, after):
     """Every way the round trip could have quietly lost something."""
-    want, expect_new = planned(before, report, at, by)
     faults = []
     if len(after) != len(want) + len(expect_new):
-        return [f"{len(after)} items came back against {len(want) + len(expect_new)} planned"]
+        return [f"{len(after)} items came back against "
+                f"{len(want) + len(expect_new)} planned"]
     index = {}
     for row in after:
         index.setdefault((row["where"], row["name"]), []).append(row)
@@ -350,8 +388,19 @@ def ripple_one(resolve, project, timeline, at, by, args, work):
     at_doc -= origin if at is not None else 0
 
     extend = tuple(args.extend) + ((args.media,) if args.media else ())
+    before = fingerprint(project, timeline, timeline)
     report = doc.ripple(at_doc, by, straddle=args.straddle,
                         extend=extend, split=tuple(args.split))
+    want, expect_new = planned(before, report, at_doc, by)
+
+    # Rejoining is not a flag. A cut this tool made and then moved back together
+    # is one it can prove is not an edit, and leaving it is a lie about the
+    # timeline -- it is how undoing a ripple leaves a through edit behind.
+    pairs = mergeable(before, want + expect_new)
+    report["merged"] = doc.rejoin({(l["where"], l["start"]) for l, _ in pairs})
+    for left, right in pairs:
+        left["end"] = right["end"]
+        (want if right in want else expect_new).remove(right)
 
     print(f"\n{name}   insert {by} frames at {timecode(at_doc + origin, fps)} "
           f"(frame {at_doc + origin})")
@@ -365,6 +414,9 @@ def ripple_one(resolve, project, timeline, at, by, args, work):
         if min(piece["head"], piece["tail"]) < 3:
             print(f"  NOTE    that leaves a {min(piece['head'], piece['tail'])}-frame "
                   f"fragment; the cut landed on the edge of a clip")
+    for where, item in report["merged"]:
+        print(f"  rejoin  {where:8s} {item.name[:38]:40s} met the clip after it "
+              f"again, so the cut between them is gone")
     print(f"  move    {len(report['moved'])} items, "
           f"{report['untouched']} untouched")
     if report["split"] and args.straddle == "split":
@@ -373,7 +425,6 @@ def ripple_one(resolve, project, timeline, at, by, args, work):
     if args.dry_run:
         return None
 
-    before = fingerprint(project, timeline, timeline)
     edited = os.path.join(work, f"{name}.drt")
     doc.rename(name)
     doc.write(edited)
@@ -386,7 +437,7 @@ def ripple_one(resolve, project, timeline, at, by, args, work):
         timeline.SetName(name)
         die(f"{name!r}: Resolve refused to import the edited timeline")
 
-    faults = compare(before, fingerprint(project, fresh, timeline), report, at_doc, by)
+    faults = compare(want, expect_new, fingerprint(project, fresh, timeline))
     # EFFECTIVE settings, because an import writes the project's values into the
     # new timeline rather than leaving it inheriting them: `useCustomSettings`
     # goes 0 -> 1 and an inherited field that read '25' comes back ''. The
@@ -402,7 +453,6 @@ def ripple_one(resolve, project, timeline, at, by, args, work):
     if timeline.GetSetting("useCustomSettings") != fresh.GetSetting("useCustomSettings"):
         print(f"  NOTE    {name!r} took the project's settings as its own; it used "
               f"to inherit them, so it will no longer follow a project change")
-    worst = floor = None
     picture = ""
     if args.verify == "frames" and not faults:
         was_end = doc.end_frame - by
