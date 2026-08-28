@@ -14,6 +14,15 @@ it creates new media pool items, and every timeline still points at the old ones
 item the timelines already reference, keeping sub-clip extents. Pointing it at the
 file the clip already has is therefore a reload: same item, same edits, new audio.
 
+AND THE STALE COPY REACHES A RENDER, not only playback, which is the part that
+costs a delivery. On 2026-08-28 a Resolve render of a film whose soundtrack had
+been re-rendered underneath it came out carrying two seconds of the PREVIOUS
+soundtrack at 2:05-2:06 and the current one everywhere else -- nothing in the
+picture, the length or the render report said so, and it was only caught by
+nulling the delivered movie's audio against the .wav it was supposed to be. Do
+that null after any render whose audio came from a file that changed: with this
+tool run first the whole 253 s nulls to zero, and without it two seconds do not.
+
 Run it after any re-render. Resolve must be open, with the project open.
 """
 import argparse
