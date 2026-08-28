@@ -37,11 +37,26 @@ import subprocess
 import sys
 import time
 
-sys.path.append("/Library/Application Support/Blackmagic Design/DaVinci Resolve/"
-                "Developer/Scripting/Modules/")
-import DaVinciResolveScript as bmd     # noqa: E402
-
 LOSSLESS = ("lpcm",)
+
+
+def written_since(out_dir, started):
+    """The file the render just wrote, found by MTIME rather than by NAME.
+
+    Re-rendering over a file that is already there -- every second delivery of
+    the same piece -- gains the directory no name, and the old rule ("what is in
+    here now, minus what was here before") called that a render that had written
+    nothing. It exited 1 with a complete 259 MB movie sitting in the directory,
+    and the real cost was not the false alarm: exiting there skipped the ffprobe
+    verification below, so the one run that most needed checking got none.
+    """
+    fresh = [f for f in os.listdir(out_dir)
+             if not f.startswith(".")
+             and os.path.getmtime(os.path.join(out_dir, f)) >= started - 1]
+    if not fresh:
+        return None
+    return os.path.join(out_dir, max(
+        fresh, key=lambda f: os.path.getmtime(os.path.join(out_dir, f))))
 
 
 def probe(path):
@@ -72,6 +87,10 @@ def main():
                  f"delivered through 320 kbps AAC leaves a residual 26 dB under "
                  f"the programme.")
 
+    sys.path.append("/Library/Application Support/Blackmagic Design/DaVinci "
+                    "Resolve/Developer/Scripting/Modules/")
+    import DaVinciResolveScript as bmd
+
     r = bmd.scriptapp("Resolve")
     if not r:
         sys.exit("Resolve is not answering: open it, and set External scripting to Local")
@@ -96,7 +115,7 @@ def main():
     if not p.SetRenderSettings(settings):
         sys.exit("SetRenderSettings refused -- one of the keys is wrong for this preset")
 
-    before = set(os.listdir(a.out))
+    started = time.time()
     job = p.AddRenderJob()
     print(f"{a.timeline}: rendering {a.preset}, audio {a.codec} "
           f"{a.bits}-bit {a.rate} Hz -> {a.out}")
@@ -110,10 +129,10 @@ def main():
     if status.get("JobStatus") != "Complete":
         sys.exit(f"render did not complete: {status}")
 
-    made = sorted(set(os.listdir(a.out)) - before)
-    if not made:
-        sys.exit(f"the job says Complete and {a.out} gained no file")
-    path = os.path.join(a.out, made[0])
+    path = written_since(a.out, started)
+    if not path:
+        sys.exit(f"the job says Complete and nothing in {a.out} was written "
+                 f"since the render started")
 
     streams = probe(path)
     if not streams:
