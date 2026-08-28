@@ -1,6 +1,6 @@
 ---
 name: davinci-resolve
-description: Load BEFORE driving DaVinci Resolve from outside it — creating a project, importing media into bins, setting clip attributes or colour management, or building a timeline by script. Also load when a task mentions the Resolve scripting API, DaVinciResolveScript, colour management, input colour space, data levels, log footage in Resolve, optimized media, or a clip that plays at the wrong speed or length.
+description: Load BEFORE driving DaVinci Resolve from outside it — creating a project, importing media into bins, setting clip attributes or colour management, building a timeline by script, or MOVING clips on one (inserting or removing time, rippling an edit, conforming picture to a soundtrack that changed length). Also load when a task mentions the Resolve scripting API, DaVinciResolveScript, colour management, input colour space, data levels, log footage in Resolve, optimized media, a clip that plays at the wrong speed or length, a .drt or DRT export, a round trip that lost grades, or an edit the API seems unable to make.
 ---
 
 # Driving DaVinci Resolve from outside
@@ -57,6 +57,67 @@ reads like a missing feature. Check the README's section headings before believi
 one is absent: `ExportCurrentFrameAsStill` is on the **Project**, `GrabStill` on
 the **Timeline**, `ApplyGradeFromDRX` on the **Graph**, `SaveProject` on the
 **ProjectManager**.
+
+## An edit the API cannot make: round-trip through DRT, never OTIO
+
+`TimelineItem` has **no `SetStart`**. There is no call that moves a clip, no
+blade, no ripple — so any edit that changes where things sit has to leave
+Resolve, be made on a file, and come back. Which file decides whether the work
+survives.
+
+**Export the timeline as DRT and import it back.** `Timeline.Export(path,
+resolve.EXPORT_DRT)` and `MediaPool.ImportTimelineFromFile(path)`. DRT is
+Resolve's own format rather than an interchange one, so a grade and a reframe
+have somewhere to go. Measured 2026-08-27 on one timeline, 83 items, 3-node
+grades and a 3.16× vertical reframe:
+
+| round trip | cuts | grade nodes | reframes | matched frames |
+|---|---|---|---|---|
+| OTIO | 70/70 | 31/70 | 49/70 | mean 37.8–91.0 off |
+| DRT | 83/83 | 83/83 | 83/83 | mean 3.25 off |
+
+against a same-frame-twice floor of 3.2 — `ExportCurrentFrameAsStill` is not
+repeatable, so a comparison without that floor has no scale, and one without a
+deliberately mismatched frame beside it has no power on a held shot.
+
+Do not build the DRX rescue instead. `Graph.ApplyGradeFromDRX` does work — a
+still exported with `GalleryStillAlbum.ExportStills([still], dir, prefix,
+"drx")` puts a 3-node grade back on a clip that came out of OTIO with one — but
+it is one grab, one export and one apply per clip, and the round trip that never
+lost the grade costs nothing.
+
+**A `.drt` is a zip of pretty-printed XML** and is editable directly:
+`project.xml` names the timeline handle, `MediaPool/Master/MpFolder.xml` holds
+the `Sm2Timeline` for it, and `SeqContainer/<uuid>.xml` holds one sequence each
+— the timeline, **and one per multicam clip**, so "the biggest file" is the
+wrong way to find the timeline. Follow the handle to its `Sm2Sequence` DbId and
+take the SeqContainer whose tracks name it as `<Sequence>`. A clip carries
+`<Start>` (frames from the timeline start), `<Duration>` and `<In>`; an empty
+`<In/>` is frame 0; a value may be `123|<hex of a little-endian double>` for a
+sub-frame remainder. Element names like `ListMgt::LmVersionTable` are not
+well-formed XML, so edit the text by span rather than re-serialising a parse.
+
+`video-tools/lib/drt.py` does all of that and `bin/resolve-ripple` is the tool:
+inserting or removing time at a point, across every timeline built on a media
+item, verifying each one and refusing to replace an original that did not come
+back whole.
+
+Two more things the import does that are worth knowing: it takes the **filename**
+as the timeline's name (not the `<ProjectName>` inside), and it writes the
+project's settings into the new timeline, so `useCustomSettings` goes 0 → 1 and
+an inherited field that read `25` comes back `''`. Compare the EFFECTIVE value —
+the timeline's setting or the project's — or you will refuse a timeline nothing
+is wrong with. It adds no media pool items but the timeline itself.
+
+## A geometry property is read in the CURRENT timeline's space
+
+`TimelineItem.GetProperty("Pan")` and `"Tilt"` are reported in the pixels of
+whatever timeline is **currently open**, not of the timeline the item is on. The
+same untouched clip reads `175.68` with a 1920×1080 timeline current and `98.82`
+with a 1080×1920 one — 16/9 apart. So a before-and-after comparison that opened
+a different timeline in between reports every reframe in the project as lost,
+which is exactly what it looked like on 2026-08-27 before the readings were
+pinned. `SetCurrentTimeline` to one timeline and take both readings under it.
 
 ## Clip attributes are where log footage is won or lost
 

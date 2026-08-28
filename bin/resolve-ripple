@@ -1,0 +1,529 @@
+#!/usr/bin/env python3
+"""Insert or remove time on Resolve timelines, keeping every grade and reframe.
+
+    resolve-ripple --media "Polyphemus video soundtrack.wav" --at 1:07.8 --by 1s
+    resolve-ripple --timeline "WDN Edit" --at 00:01:06:20 --by 25f --straddle repeat
+    resolve-ripple --media "mix.wav" --at 67.8 --by -12f --dry-run
+
+The job this exists for: a mix is re-rendered a second longer in the middle, and
+every picture edit built on it now needs a second of room at that point. Resolve
+can do it by hand and cannot do it by script -- `TimelineItem` has no `SetStart`,
+so the API cannot move a clip -- and the obvious way round that, exporting the
+timeline and importing it back, is where the grades go. Measured 2026-08-27 on
+`Polyphemus Horizontal`: an OTIO round trip kept 70/70 cuts and **31/70 grades,
+49/70 reframes**.
+
+So this round-trips through **DRT**, which is Resolve's own format rather than an
+interchange one, and keeps everything: 83/83 of cuts, source in-points, grade
+node counts and reframing properties, with matched frames out of the two
+timelines agreeing to within the still exporter's own repeatability. Every run
+re-checks that, on its own material, and refuses to delete the original timeline
+when it does not hold -- because a round trip that silently flattened a grade and
+one that worked look identical from the outside.
+
+`--at` is a point in the MEDIA's own time when `--media` is given, which is what
+you want: it is the time you gave `arc ripple`, and each timeline holds that
+media at its own offset, so the per-timeline positions are worked out here
+instead of by hand. With `--timeline` alone it is timeline time.
+
+A clip the point falls inside is the one case with no right default:
+
+    --straddle split    (default) cut it and move the right half, leaving a real
+                        hole to fill -- a faithful ripple
+    --straddle repeat   as split, but the left half runs on into the hole, so it
+                        is covered with material that is really there and the
+                        shot repeats
+    --straddle extend   let it run longer -- what a still wants
+
+Stills always extend: there is nothing in one to cut at, and a hole in an
+overlay is never what was meant. The media named by `--media` always extends
+too -- it is the thing that got longer.
+
+Resolve must be open with the project open, and the edited timelines replace the
+originals in place (`--keep-original` leaves them beside, renamed).
+"""
+import argparse
+import os
+import re
+import shutil
+import sys
+import tempfile
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
+sys.path.append("/Library/Application Support/Blackmagic Design/DaVinci Resolve/"
+                "Developer/Scripting/Modules")
+os.environ.setdefault(
+    "RESOLVE_SCRIPT_LIB",
+    "/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/Libraries/"
+    "Fusion/fusionscript.so")
+
+import drt as drtlib
+
+TOOL = "resolve-ripple"
+REFRAME = ("ZoomX", "ZoomY", "Pan", "Tilt", "RotationAngle", "AnchorPointX",
+           "AnchorPointY", "CropLeft", "CropRight", "CropTop", "CropBottom",
+           "Opacity", "FlipX", "FlipY")
+
+
+def die(message):
+    sys.exit(f"{TOOL}: {message}")
+
+
+def connect():
+    try:
+        import DaVinciResolveScript as dvr
+    except ImportError:
+        die("Resolve's scripting module is not on the path")
+    resolve = dvr.scriptapp("Resolve")
+    if not resolve:
+        die("Resolve is not running (open it, and set External scripting to Local)")
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        die("no project is open")
+    return resolve, project
+
+
+def timelines(project):
+    return [project.GetTimelineByIndex(i) for i in range(1, project.GetTimelineCount() + 1)]
+
+
+def parse_time(text, fps, what):
+    """`00:01:06:20`, `1:07.8`, `67.8`, `67.8s` or `1670f`, as whole frames."""
+    text = text.strip()
+    sign = -1 if text.startswith("-") else 1
+    text = text.lstrip("+-")
+    if text.endswith("f"):
+        return sign * int(round(float(text[:-1])))
+    if re.fullmatch(r"\d+:\d\d:\d\d:\d\d", text):
+        h, m, s, f = (int(p) for p in text.split(":"))
+        return sign * int(round(((h * 60 + m) * 60 + s) * fps + f))
+    if re.fullmatch(r"\d+:\d\d(\.\d+)?", text):
+        m, s = text.split(":")
+        return sign * int(round((int(m) * 60 + float(s)) * fps))
+    try:
+        return sign * int(round(float(text.rstrip("s")) * fps))
+    except ValueError:
+        die(f"{what} {text!r} is not a timecode, a number of seconds or a frame count")
+
+
+def timecode(frame, fps):
+    frame = int(round(frame))
+    per_minute, per_hour = int(round(fps)) * 60, int(round(fps)) * 3600
+    h, rest = divmod(frame, per_hour)
+    m, rest = divmod(rest, per_minute)
+    s, f = divmod(rest, int(round(fps)))
+    return f"{h:02d}:{m:02d}:{s:02d}:{f:02d}"
+
+
+def api_items(timeline):
+    """Every item, in the order lib/drt.py reads them, so the two can be paired."""
+    out = []
+    for kind in ("video", "audio", "subtitle"):
+        for track in range(1, timeline.GetTrackCount(kind) + 1):
+            for item in timeline.GetItemListInTrack(kind, track) or []:
+                out.append((f"{kind}{track}", item))
+    return out
+
+
+def fingerprint(project, timeline, under):
+    """Every item of `timeline`, read while `under` is the current timeline.
+
+    `under` is not decoration. `TimelineItem.GetProperty("Pan")` and `"Tilt"`
+    are reported in the CURRENT timeline's pixel space rather than the item's
+    own, so the same clip reads 175.68 with a 1920x1080 timeline open and 98.82
+    with a 1080x1920 one -- 16/9 apart, on a clip nobody touched. Comparing a
+    reading taken before an edit against one taken after it, with a different
+    timeline open in between, therefore reports every reframe in the project as
+    lost. Measured 2026-08-27; both readings come back identical once the
+    current timeline is pinned.
+    """
+    project.SetCurrentTimeline(under)
+    origin = timeline.GetStartFrame()
+    rows = []
+    for where, item in api_items(timeline):
+        row = {"where": where, "name": item.GetName(),
+               "start": item.GetStart() - origin, "end": item.GetEnd() - origin,
+               "src_in": item.GetLeftOffset()}
+        if where.startswith("video"):
+            try:
+                row["nodes"] = item.GetNumNodes()
+            except Exception:
+                row["nodes"] = None
+            for prop in REFRAME:
+                row[prop] = item.GetProperty(prop)
+        rows.append(row)
+    return rows
+
+
+def drt_origin(timeline, doc):
+    """How the DRT counts frames against how the API does, measured not assumed."""
+    pairs = list(zip(api_items(timeline), doc.items))
+    if len(pairs) != len(doc.items) or len(doc.items) != len(api_items(timeline)):
+        die(f"{timeline.GetName()!r}: the export holds {len(doc.items)} items and "
+            f"the timeline {len(api_items(timeline))}; refusing to guess which is which")
+    offsets = {api.GetStart() - item.start.frames for (_, api), item in pairs}
+    if len(offsets) != 1:
+        die(f"{timeline.GetName()!r}: the export and the timeline disagree about "
+            f"where clips are (offsets {sorted(offsets)}); refusing to edit it")
+    # The second reading. An empty <In/> is read as frame 0 and a clone's source
+    # in-point is arithmetic on it, so this is where that reading is checked.
+    wrong = [(api.GetName(), api.GetLeftOffset(), item.src_in.frames)
+             for (_, api), item in pairs
+             if item.src_in is not None and api.GetLeftOffset() != item.src_in.frames]
+    if wrong:
+        die(f"{timeline.GetName()!r}: the export and the timeline disagree about "
+            f"source in-points, first {wrong[0]}; refusing to edit it")
+    return offsets.pop()
+
+
+def anchor(timeline, doc, media, at_source, fps):
+    """The point, on THIS timeline, of `at_source` in `media`'s own frames."""
+    hits = [it for it in doc.items if it.name == media]
+    if not hits:
+        return None
+    if len(hits) > 1:
+        die(f"{timeline.GetName()!r} holds {len(hits)} clips named {media!r} "
+            f"({', '.join(timecode(h.start.frames, fps) for h in hits)}); "
+            f"name a timeline and give --at in timeline time")
+    clip = hits[0]
+    if clip.src_in is None:
+        die(f"{timeline.GetName()!r}: the {media!r} clip declares no source in-point")
+    return clip.start.frames + at_source - clip.src_in.frames
+
+
+def reload_media(project, name):
+    pool = project.GetMediaPool()
+
+    def walk(folder):
+        yield from folder.GetClipList()
+        for sub in folder.GetSubFolderList():
+            yield from walk(sub)
+
+    hits = [c for c in walk(pool.GetRootFolder()) if c.GetName() == name]
+    if not hits:
+        die(f"no media pool item is named {name!r}")
+    for clip in hits:
+        was = clip.GetClipProperty("Duration")
+        path = clip.GetClipProperty("File Path")
+        clip.ReplaceClipPreserveSubClip(path)
+        now = clip.GetClipProperty("Duration")
+        print(f"  reloaded {name}: {was} -> {now}")
+
+
+def planned(before, report, at, by):
+    """What the fingerprint MUST read afterwards, derived from the plan alone.
+
+    Written against the plan rather than against the result, because a check
+    that reads the new timeline and asks whether it looks reasonable would pass
+    on any edit at all.
+    """
+    extended = {(w, i.start.frames) for w, i in report["extended"]}
+    split = {(s["where"], s["item"].start.frames): s for s in report["split"]}
+    want, expect_new = [], []
+    for row in before:
+        key = (row["where"], row["start"])
+        if row["start"] >= at:
+            want.append(dict(row, start=row["start"] + by, end=row["end"] + by))
+        elif key in extended:
+            want.append(dict(row, end=row["end"] + by))
+        elif key in split:
+            piece = split[key]
+            want.append(dict(row, end=at + (by if piece["mode"] == "repeat" else 0)))
+            expect_new.append(dict(row, start=piece["tail_start"],
+                                   end=piece["tail_start"] + piece["tail"],
+                                   src_in=row["src_in"] + piece["head"]))
+        else:
+            want.append(row)
+    return want, expect_new
+
+
+def compare(before, after, report, at, by):
+    """Every way the round trip could have quietly lost something."""
+    want, expect_new = planned(before, report, at, by)
+    faults = []
+    if len(after) != len(want) + len(expect_new):
+        return [f"{len(after)} items came back against {len(want) + len(expect_new)} planned"]
+    index = {}
+    for row in after:
+        index.setdefault((row["where"], row["name"]), []).append(row)
+    for row in want + expect_new:
+        found = next((c for c in index.get((row["where"], row["name"]), [])
+                      if c["start"] == row["start"]), None)
+        if found is None:
+            faults.append(f"{row['name']!r} on {row['where']} is not at "
+                          f"frame {row['start']} any more")
+            continue
+        for key in ("end", "src_in", "nodes", *REFRAME):
+            if key in row and row[key] != found[key]:
+                faults.append(f"{row['name']!r} on {row['where']} at {row['start']}: "
+                              f"{key} {row[key]!r} -> {found[key]!r}")
+    return faults
+
+
+def grab(project, timeline, frames, prefix, settle):
+    """Export stills at `frames`, parking the playhead once per frame."""
+    import time
+    project.SetCurrentTimeline(timeline)
+    time.sleep(settle)
+    fps = float(timeline.GetSetting("timelineFrameRate"))
+    out = {}
+    for label, frame in frames:
+        timeline.SetCurrentTimecode(timecode(timeline.GetStartFrame() + frame, fps))
+        time.sleep(settle)
+        path = f"{prefix}-{label}.png"
+        if not project.ExportCurrentFrameAsStill(path):
+            die(f"{timeline.GetName()!r}: Resolve refused to export frame {frame}")
+        out[label] = path
+    return out
+
+
+def frame_check(resolve, project, old, new, at, by, sample, settle):
+    """Do the two timelines still RENDER the same picture where they should?
+
+    The structural check reads node COUNTS and reframing properties, and a
+    flattened grade with the right number of nodes would walk past it. This
+    reads the picture instead, and it needs two things a bare tolerance cannot
+    give it:
+
+      a floor, because `ExportCurrentFrameAsStill` is not repeatable -- the same
+      frame of the same timeline twice differs by a mean of about 3 counts on
+      this material, so anything under that is the exporter, not the edit; and
+
+      a control that FAILS, because on a held shot every frame matches every
+      other one and a comparison that cannot tell them apart would pass however
+      badly the grade had been lost. So each point also compares against a frame
+      a second away, and a point where THAT matches too is reported as having
+      proved nothing rather than counted as a pass.
+
+    Measured 2026-08-27 on `Polyphemus Horizontal`: same frame twice, mean 2.6-2.9;
+    a lossless DRT round trip, 1.6-3.2; two frames a second apart, 57.
+    """
+    import numpy
+    from PIL import Image
+
+    resolve.OpenPage("color")
+    work = tempfile.mkdtemp(prefix="resolve-ripple-frames-")
+    control_gap = int(round(float(old.GetSetting("timelineFrameRate"))))
+    try:
+        def pixels(path):
+            return numpy.asarray(Image.open(path).convert("RGB"), dtype=numpy.int32)
+
+        def mean_difference(a, b):
+            return float(numpy.abs(pixels(a) - pixels(b)).mean())
+
+        was = grab(project, old, [(f"{f}a", f) for f in sample]
+                   + [(f"{f}b", f) for f in sample], f"{work}/old", settle)
+        shifted = [(f, f + (by if f >= at else 0)) for f in sample]
+        now = grab(project, new,
+                   [(f"{f}m", g) for f, g in shifted]
+                   + [(f"{f}c", g + control_gap) for f, g in shifted],
+                   f"{work}/new", settle)
+
+        floors, matches, blind = [], [], []
+        for frame in sample:
+            floor = mean_difference(was[f"{frame}a"], was[f"{frame}b"])
+            match = mean_difference(was[f"{frame}a"], now[f"{frame}m"])
+            control = mean_difference(was[f"{frame}a"], now[f"{frame}c"])
+            floors.append(floor)
+            matches.append((frame, match, floor))
+            if control <= max(4 * floor, 4.0):
+                blind.append(frame)
+        return matches, blind
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def ripple_one(resolve, project, timeline, at, by, args, work):
+    name = timeline.GetName()
+    fps = float(timeline.GetSetting("timelineFrameRate"))
+    export = os.path.join(work, "export.drt")
+    if not timeline.Export(export, resolve.EXPORT_DRT):
+        die(f"{name!r}: Resolve refused to export the timeline")
+    doc = drtlib.Timeline(export)
+    origin = drt_origin(timeline, doc)
+
+    at_doc = at if at is not None else anchor(
+        timeline, doc, args.media, args.at_source, fps)
+    if at_doc is None:
+        print(f"{name}: holds no {args.media!r}, skipped")
+        return None
+    at_doc -= origin if at is not None else 0
+
+    extend = tuple(args.extend) + ((args.media,) if args.media else ())
+    report = doc.ripple(at_doc, by, straddle=args.straddle,
+                        extend=extend, split=tuple(args.split))
+
+    print(f"\n{name}   insert {by} frames at {timecode(at_doc + origin, fps)} "
+          f"(frame {at_doc + origin})")
+    for where, item in report["extended"]:
+        print(f"  extend  {where:8s} {item.name[:38]:40s} "
+              f"{item.duration.frames - by} -> {item.duration.frames} frames")
+    for piece in report["split"]:
+        print(f"  {piece['mode']:7s} {piece['where']:8s} "
+              f"{piece['item'].name[:38]:40s} {piece['head']} frames before the "
+              f"cut, {piece['tail']} after")
+        if min(piece["head"], piece["tail"]) < 3:
+            print(f"  NOTE    that leaves a {min(piece['head'], piece['tail'])}-frame "
+                  f"fragment; the cut landed on the edge of a clip")
+    print(f"  move    {len(report['moved'])} items, "
+          f"{report['untouched']} untouched")
+    if report["split"] and args.straddle == "split":
+        print(f"  the {by}-frame hole at {timecode(at_doc + origin, fps)} is yours "
+              f"to fill (--straddle repeat covers it with the shot running on)")
+    if args.dry_run:
+        return None
+
+    before = fingerprint(project, timeline, timeline)
+    edited = os.path.join(work, f"{name}.drt")
+    doc.rename(name)
+    doc.write(edited)
+
+    stash = f"{name} (before ripple)"
+    if not timeline.SetName(stash):
+        die(f"{name!r}: could not rename the original out of the way")
+    fresh = project.GetMediaPool().ImportTimelineFromFile(edited)
+    if not fresh:
+        timeline.SetName(name)
+        die(f"{name!r}: Resolve refused to import the edited timeline")
+
+    faults = compare(before, fingerprint(project, fresh, timeline), report, at_doc, by)
+    # EFFECTIVE settings, because an import writes the project's values into the
+    # new timeline rather than leaving it inheriting them: `useCustomSettings`
+    # goes 0 -> 1 and an inherited field that read '25' comes back ''. The
+    # picture is the same either way, so comparing the raw fields refuses a
+    # timeline nothing is wrong with.
+    for setting in ("timelineResolutionWidth", "timelineResolutionHeight",
+                    "timelineFrameRate", "timelinePlaybackFrameRate",
+                    "timelineOutputResolutionWidth", "timelineOutputResolutionHeight"):
+        was = timeline.GetSetting(setting) or project.GetSetting(setting)
+        now = fresh.GetSetting(setting) or project.GetSetting(setting)
+        if was != now:
+            faults.append(f"{setting} {was!r} -> {now!r}")
+    if timeline.GetSetting("useCustomSettings") != fresh.GetSetting("useCustomSettings"):
+        print(f"  NOTE    {name!r} took the project's settings as its own; it used "
+              f"to inherit them, so it will no longer follow a project change")
+    worst = floor = None
+    picture = ""
+    if args.verify == "frames" and not faults:
+        was_end = doc.end_frame - by
+        sample = sorted({f for f in (at_doc // 3, at_doc + 100, was_end - 100)
+                         if 0 <= f < was_end})
+        matches, blind = frame_check(resolve, project, timeline, fresh,
+                                     at_doc, by, sample, args.settle)
+        for frame, match, floor in matches:
+            if match > max(2 * floor, 2.0):
+                faults.append(
+                    f"frame {frame} renders differently: mean {match:.2f} against "
+                    f"a same-frame-twice floor of {floor:.2f}; a grade or a "
+                    f"reframe did not survive")
+        for frame in blind:
+            print(f"  NOTE    frame {frame} looks the same as one a second later, "
+                  f"so matching there proves nothing")
+        good = [m for f, m, _ in matches if f not in blind]
+        picture = (f"; picture matched to a mean of {max(good):.2f} at "
+                   f"{len(good)}/{len(matches)} points" if good else
+                   "; no sampled frame could tell a second apart, so the picture "
+                   "check proved nothing")
+    if faults:
+        unverified = f"{name} (rippled, UNVERIFIED)"
+        fresh.SetName(unverified)
+        timeline.SetName(name)
+        print(f"  REFUSED to replace {name!r}. The edit is beside it as "
+              f"{unverified!r}, to look at or to delete:")
+        for fault in faults[:10]:
+            print(f"    {fault}")
+        return False
+    print(f"  verified: {len(before)} items, cuts, grades and reframing intact"
+          + picture)
+    if args.keep_original:
+        print(f"  kept the original as {stash!r}")
+    else:
+        project.GetMediaPool().DeleteTimelines([timeline])
+    return True
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--at", required=True,
+                    help="the point: 00:01:06:20, 1:07.8, 67.8s or 1670f. "
+                         "In the media's own time with --media, else timeline time")
+    ap.add_argument("--by", required=True,
+                    help="time to insert, same forms; negative removes it")
+    ap.add_argument("--media",
+                    help="the media pool clip --at is timed against; also picks the "
+                         "timelines, is reloaded from disk, and is the clip that "
+                         "gets longer")
+    ap.add_argument("--timeline", action="append", default=[],
+                    help="a timeline by name; repeatable. Default: every timeline "
+                         "holding --media")
+    ap.add_argument("--straddle", default="split", choices=("split", "repeat", "extend"),
+                    help="what a clip the point falls inside does (default split)")
+    ap.add_argument("--extend", action="append", default=[], metavar="NAME",
+                    help="always extend clips of this name")
+    ap.add_argument("--split", action="append", default=[], metavar="NAME",
+                    help="always split clips of this name, stills included")
+    ap.add_argument("--verify", default="frames", choices=("frames", "structure"),
+                    help="frames also renders matched stills out of both timelines "
+                         "(default); structure checks cuts, nodes and reframing only")
+    ap.add_argument("--settle", type=float, default=2.5,
+                    help="seconds to let the viewer catch up per frame (default 2.5)")
+    ap.add_argument("--keep-original", action="store_true",
+                    help="leave the untouched timeline beside the new one")
+    ap.add_argument("--no-reload", action="store_true",
+                    help="do not reload --media from disk first")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="say what would move, and change nothing")
+    args = ap.parse_args()
+
+    if not args.media and not args.timeline:
+        die("name a --timeline, or the --media whose length changed")
+
+    resolve, project = connect()
+    print(f"project: {project.GetName()}")
+
+    chosen = timelines(project)
+    if args.timeline:
+        known = {t.GetName(): t for t in chosen}
+        missing = [n for n in args.timeline if n not in known]
+        if missing:
+            die(f"no timeline named {', '.join(repr(n) for n in missing)}")
+        chosen = [known[n] for n in args.timeline]
+    else:
+        chosen = [t for t in chosen
+                  if any(item.GetName() == args.media
+                         for _, item in api_items(t))]
+        if not chosen:
+            die(f"no timeline holds {args.media!r}")
+        print(f"timelines holding {args.media!r}: "
+              + ", ".join(repr(t.GetName()) for t in chosen))
+
+    fps = float(chosen[0].GetSetting("timelineFrameRate"))
+    by = parse_time(args.by, fps, "--by")
+    args.at_source = parse_time(args.at, fps, "--at") if args.media else None
+    at = None if args.media else parse_time(args.at, fps, "--at")
+
+    if args.media and not args.no_reload and not args.dry_run:
+        reload_media(project, args.media)
+
+    work = tempfile.mkdtemp(prefix="resolve-ripple-")
+    results = []
+    try:
+        for timeline in chosen:
+            results.append(ripple_one(resolve, project, timeline, at, by, args, work))
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+    if args.dry_run:
+        print("\ndry run: nothing was changed")
+        return
+    resolve.GetProjectManager().SaveProject()
+    done = sum(1 for r in results if r)
+    print(f"\n{done}/{len([r for r in results if r is not None])} timelines rippled "
+          f"and saved")
+    if any(r is False for r in results):
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
