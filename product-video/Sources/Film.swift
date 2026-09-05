@@ -340,7 +340,11 @@ enum Film {
         paragraph.alignment = .center
         paragraph.lineHeightMultiple = 1.08
         let drawn = NSAttributedString(string: text, attributes: [
-            .font: NSFont.systemFont(ofSize: min(size, bounds.width / 26), weight: .semibold),
+            // Sized to the picture: a 26th of its width, or of three quarters
+            // of its height when the picture is taller than it is wide, so a
+            // phone-shaped film does not get captions a phone cannot read.
+            .font: NSFont.systemFont(ofSize: min(size, max(bounds.width, bounds.height * 0.75) / 26),
+                                     weight: .semibold),
             .foregroundColor: NSColor.white.withAlphaComponent(0.97 * alpha),
             .paragraphStyle: paragraph,
         ])

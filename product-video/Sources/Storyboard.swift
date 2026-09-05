@@ -44,15 +44,20 @@ struct Storyboard {
         let chrome: String?
     }
 
-    /// A phone gets the same film redrawn in the `vertical` block's shape rather
-    /// than cropped out of the wide one, so say which one you are rendering.
-    func geometry(vertical: Bool) -> Geometry {
-        let block = (vertical ? board["vertical"] as? [String: Any] : nil) ?? [:]
+    /// A variant is the same film redrawn in another shape rather than cropped
+    /// out of the wide one: `vertical` for a phone, or any block the storyboard
+    /// names (an App Store preview is `"preview": {"chrome": false, "canvas":
+    /// false}`, the product filling the picture). Say which one you are
+    /// rendering. A variant's `canvas: false` means no room around the product,
+    /// even when the wide film has one.
+    func geometry(variant: String?) -> Geometry {
+        let block = variant.flatMap { board[$0] as? [String: Any] } ?? [:]
         func value(_ key: String) -> Double? {
             Storyboard.number(block[key]) ?? Storyboard.number(board[key])
         }
         func canvasSize() -> CGSize? {
-            guard let raw = (block["canvas"] ?? board["canvas"]) as? [String: Any],
+            let raw = block.keys.contains("canvas") ? block["canvas"] : board["canvas"]
+            guard let raw = raw as? [String: Any],
                   let wide = Storyboard.number(raw["width"]),
                   let tall = Storyboard.number(raw["height"]) else { return nil }
             return CGSize(width: wide, height: tall)
@@ -181,6 +186,11 @@ struct Timeline {
     /// room and the room is the rest of the canvas; a take stack fills its own
     /// window and has no canvas at all.
     let canvas: CGSize?
+    /// How much of the product's own height, from the top, a title may stand
+    /// in when the product fills the picture. Nothing, and the words go over
+    /// the middle. A phone app whose middle is its own headline says 0.08 or
+    /// so: the status bar's worth.
+    let titleBand: CGFloat?
     /// `"macos"`, or a device `bin/device-frame` knows. A frame source that says
     /// nothing but gives a window title still gets the macOS bar, which is what
     /// every one of them meant before this key existed.
@@ -209,6 +219,7 @@ struct Timeline {
             canvas = nil
         }
         chrome = body["chrome"].flatMap { Storyboard.chrome($0) } ?? (title == nil ? nil : "macos")
+        titleBand = Storyboard.number(body["titleBand"]).map { CGFloat($0) }
         camera = (body["camera"] as? [[String: Any]] ?? []).map {
             (Storyboard.number($0["at"]) ?? 0,
              CGFloat(Storyboard.number($0["to"]) ?? 1),

@@ -70,7 +70,7 @@ func layout(canvas: CGSize?, product: CGSize, chrome: String?)
 }
 
 if arguments.contains("--layout") {
-    let shape = storyboard.geometry(vertical: arguments.contains("--vertical"))
+    let shape = storyboard.geometry(variant: text("--variant") ?? (arguments.contains("--vertical") ? "vertical" : nil))
     let places = layout(canvas: shape.canvas, product: shape.size, chrome: shape.chrome)
     // In master pixels, which is what an ffmpeg crop wants.
     func pixels(_ box: NSRect) -> [String: Int] {
@@ -105,7 +105,16 @@ let backdrop = text("--backdrop")
 // nothing and the titles go over the middle as they always have; one standing in
 // a room is usually a screen full of words, and a title on top of them is two
 // sentences in one place.
-Film.keepClear = places.device == nil ? nil : places.product
+if places.device != nil {
+    Film.keepClear = places.product
+} else if let band = timeline.titleBand {
+    // The product fills the picture; keep the words to a band at its top.
+    let top = places.product.height * band
+    Film.keepClear = NSRect(x: places.product.minX, y: places.product.minY,
+                            width: places.product.width, height: places.product.height - top)
+} else {
+    Film.keepClear = nil
+}
 
 // MARK: the frames
 
