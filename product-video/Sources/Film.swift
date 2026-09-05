@@ -219,23 +219,32 @@ enum Film {
         return below.height >= height + 24 ? below : nil
     }
 
-    /// The dark the words are read against.
+    /// The dark the words are read against: a black gradient under the words,
+    /// solid where they are and gone before it reaches the product, so there
+    /// is no edge -- a film about light should not black out the room it is
+    /// measuring every time it says something.
     ///
-    /// Over the whole frame when the words are over the whole frame. When they
-    /// have a band of their own, only that band, fading out towards the product
-    /// so there is no edge -- a film about light should not black out the room
-    /// it is measuring every time it says something.
+    /// In a band of their own, the gradient fills the band and fades towards
+    /// the product. Over the product itself (no band), it is a strip around
+    /// the words that fades both ways, rather than a wash over the whole frame
+    /// that darkened the app and still left the words on top of its own text.
     static func scrim(_ alpha: Double, over bounds: NSRect, height: CGFloat) {
-        guard let band = clearBand(in: bounds, height: height) else {
-            NSColor.black.withAlphaComponent(alpha).setFill()
-            bounds.fill()
-            return
-        }
         let solid = NSColor.black.withAlphaComponent(alpha)
         let gone = NSColor.black.withAlphaComponent(0)
+        guard let band = clearBand(in: bounds, height: height) else {
+            let pad = height * 0.9 + 24
+            let strip = NSRect(x: 0, y: titleBaseline(in: bounds, height: height) - pad,
+                               width: bounds.width, height: height + 2 * pad)
+            NSGradient(colorsAndLocations: (gone, 0), (solid, 0.35), (solid, 0.65), (gone, 1))?
+                .draw(in: strip, angle: 90)
+            return
+        }
+        // Solid behind the words, fading only on the side the product is on.
         let atBottom = band.minY < bounds.midY
-        NSGradient(starting: atBottom ? solid : gone, ending: atBottom ? gone : solid)?
-            .draw(in: band, angle: 90)
+        let stops: [(NSColor, CGFloat)] = atBottom
+            ? [(solid, 0), (solid, 0.55), (gone, 1)]
+            : [(gone, 0), (solid, 0.45), (solid, 1)]
+        NSGradient(colorsAndLocations: stops[0], stops[1], stops[2])?.draw(in: band, angle: 90)
     }
 
     /// A title does not fade up, it lands: opaque almost at once, and a fraction
@@ -263,7 +272,7 @@ enum Film {
         let (alpha, scale) = pop(start, end, now: at, handingOver: handingOver)
         guard alpha > 0.01 else { return }
         let drawn = line(text, size: 52 * scale, alpha: alpha, in: bounds)
-        scrim(0.5 * alpha, over: bounds, height: drawn.height)
+        scrim(0.8 * alpha, over: bounds, height: drawn.height)
         place(drawn.text, width: drawn.width, in: bounds,
               top: titleBaseline(in: bounds, height: drawn.height) + drawn.height)
     }
