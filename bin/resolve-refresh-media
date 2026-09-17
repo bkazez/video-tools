@@ -23,10 +23,20 @@ nulling the delivered movie's audio against the .wav it was supposed to be. Do
 that null after any render whose audio came from a file that changed: with this
 tool run first the whole 253 s nulls to zero, and without it two seconds do not.
 
+A RENDER WRITTEN BY RENAMING A NEW FILE OVER THE OLD ONE survives the reload
+too. Resolve keeps the old file open, and an open file outlives the rename: on
+2026-09-17 a Schumann mix moved into place with `mv` was "reloaded" here, and
+three renders of the timeline still measured the previous mix's -25.85 LUFS
+against the new file's -27.45, while `lsof` showed Resolve reading the old
+inode under the new name. Only closing the project lets go of it, so when
+Resolve holds any inode for a path that is no longer the file at that path,
+this saves, closes and reopens the project, then checks again.
+
 Run it after any re-render. Resolve must be open, with the project open.
 """
 import argparse
 import os
+import subprocess
 import sys
 
 sys.path.append("/Library/Application Support/Blackmagic Design/DaVinci Resolve/"
@@ -69,6 +79,33 @@ def timeline_usage(project):
     return used
 
 
+def stale_paths(paths):
+    """Paths Resolve still reads from an inode that is no longer the file there."""
+    pids = subprocess.run(["pgrep", "-x", "Resolve"],
+                          capture_output=True).stdout.decode().split()
+    if not pids:
+        return set()
+    out = subprocess.run(["lsof", "-p", ",".join(pids), "-F", "in"],
+                         capture_output=True).stdout.decode("utf-8", "replace")
+    stale, inode = set(), None
+    for line in out.splitlines():
+        if line.startswith("i"):
+            inode = int(line[1:])
+        elif line.startswith("n") and line[1:] in paths and inode is not None:
+            if os.path.exists(line[1:]) and os.stat(line[1:]).st_ino != inode:
+                stale.add(line[1:])
+    return stale
+
+
+def reopen(resolve, project):
+    manager = resolve.GetProjectManager()
+    name = project.GetName()
+    if not (manager.SaveProject() and manager.CloseProject(project)
+            and manager.LoadProject(name)):
+        sys.exit(f"resolve-refresh-media: could not reopen {name}; open it by hand")
+    return manager.GetCurrentProject()
+
+
 def main():
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -86,6 +123,7 @@ def main():
 
     refreshed = missing = 0
     gone = []
+    reloaded = set()
     for folder in walk(pool.GetRootFolder()):
         if args.bin and folder.GetName() != args.bin:
             continue
@@ -108,8 +146,21 @@ def main():
             if clip.ReplaceClipPreserveSubClip(path):
                 print(f"  reloaded  {os.path.basename(path)}")
                 refreshed += 1
+                reloaded.add(path)
             else:
                 print(f"  FAILED    {os.path.basename(path)}", file=sys.stderr)
+
+    stale = stale_paths(reloaded)
+    if stale:
+        print(f"\nResolve still reads the replaced file behind "
+              f"{', '.join(sorted(os.path.basename(p) for p in stale))}; reopening the project")
+        project = reopen(resolve, project)
+        pool = project.GetMediaPool()
+        still = stale_paths(stale)
+        if still:
+            sys.exit("resolve-refresh-media: still reading the old file after reopening: "
+                     + ", ".join(sorted(still)) + " -- quit and relaunch Resolve")
+        print("  released")
 
     if gone:
         # Deleting a clip that a timeline still uses would edit that timeline, so
