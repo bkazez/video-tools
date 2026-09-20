@@ -1,0 +1,175 @@
+#!/usr/bin/env python3
+"""Cut a shot from one take and retime it to lock onto another take's audio.
+
+A singer is filmed on take 9 and the take you release is take 22. The picture
+is usable -- same singer, same words, same camera -- but the tempo is not the
+same, so a straight cut drifts out of sync within a phrase. This takes the warp
+map `arc warp` already computes between the two takes' audio, reads the two
+takes' times at the ends of the window you want, and renders the donor's
+picture at the one speed that makes those ends land on the reference's clock.
+
+    arc warp "Mixes/Faure T9.wav" "Mixes/Faure T22.wav" --json warp.json
+    lipsync-clip --warp warp.json --clip Video/C0485.MP4 --offset 13.800 \
+                 --from 14.0 --to 45.0 --out closeup.mp4
+
+--offset is the donor take's own camera offset: the clip's real time when that
+take's audio is at zero. Where a camera shot S&Q, its file runs at half real
+speed; --capture-fps says so and the arithmetic follows.
+
+The residual is printed and is what the warp map can support -- on organ and
+voice material arc warp lands within a tenth of a second over a minute, which
+is inside a frame at 25 fps once the ends are pinned. A window that needs more
+than a few per cent of speed change is refused: that is a bad window or a bad
+map, and stretching it that far would be visible in the picture.
+"""
+
+import argparse
+import bisect
+import json
+import subprocess
+import sys
+
+
+def read_map(path):
+    with open(path) as f:
+        model = json.load(f)
+    query, reference = model["map"]
+    return model, query, reference
+
+
+def at(reference, query, t):
+    i = bisect.bisect_left(reference, t)
+    i = max(1, min(i, len(reference) - 1))
+    span = reference[i] - reference[i - 1]
+    f = (t - reference[i - 1]) / span if span > 0 else 0.0
+    return query[i - 1] + f * (query[i] - query[i - 1])
+
+
+def piecewise(args, model, query, reference):
+    """One speed per segment, so a curved map is followed rather than averaged."""
+    import os
+    import tempfile
+    want = args.end - args.start
+    steps = max(1, round(want / args.segment))
+    slow = (args.capture_fps / args.file_fps) if args.capture_fps else 1.0
+    # Segment edges land on output frames, so the pieces join without a gap.
+    edges = [args.start + want * k / steps for k in range(steps + 1)]
+    edges = [round(e * args.fps) / args.fps for e in edges]
+    worst = 0.0
+    for k in range(steps):
+        a, b = edges[k], edges[k + 1]
+        da, db = at(reference, query, a), at(reference, query, b)
+        speed = (db - da) / (b - a)
+        for j in range(11):
+            t = a + (b - a) * j / 10
+            worst = max(worst, abs(at(reference, query, t) - (da + (t - a) * speed)))
+    print(f"steps  {steps} of {want / steps:.2f} s; worst departure inside a step "
+          f"{worst * 1000:.0f} ms ({worst * args.fps:.2f} frames)")
+    if args.dry_run:
+        return
+    tmp = tempfile.mkdtemp(prefix="lipsync-")
+    parts = []
+    for k in range(steps):
+        a, b = edges[k], edges[k + 1]
+        da, db = at(reference, query, a), at(reference, query, b)
+        piece = os.path.join(tmp, f"part{k:03d}.mp4")
+        file_in, file_span = (da + args.offset) * slow, (db - da) * slow
+        # -frames:v, not duration: a seek lands on a keyframe and the decoder
+        # hands over what it decoded, so asking for seconds gives a piece that
+        # is a little long and the shot drifts out by the end of the shot.
+        frames = int(round((b - a) * args.fps))
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error",
+                        "-ss", f"{file_in:.4f}", "-i", args.clip,
+                        "-filter:v", f"setpts=PTS/{file_span / (b - a):.6f},fps={args.fps:g}",
+                        "-frames:v", str(frames), "-c:v", "libx264", "-crf", str(args.crf),
+                        "-preset", "medium", "-pix_fmt", "yuv420p", "-an", piece], check=True)
+        parts.append(piece)
+    listing = os.path.join(tmp, "parts.txt")
+    with open(listing, "w") as f:
+        for piece in parts:
+            f.write(f"file '{piece}'\n")
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0",
+                    "-i", listing, "-c", "copy", args.out], check=True)
+    out = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                          "-of", "default=nw=1:nk=1", args.out],
+                         capture_output=True, text=True).stdout.strip()
+    print(f"wrote  {args.out}  {float(out):.3f} s (wanted {want:.3f})")
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--warp", required=True, help="arc warp --json, donor as QUERY")
+    p.add_argument("--clip", required=True, help="the donor take's camera file")
+    p.add_argument("--offset", type=float, required=True,
+                   help="clip real seconds when the donor take's audio is at 0")
+    p.add_argument("--from", dest="start", type=float, required=True,
+                   help="reference take seconds, where the shot starts")
+    p.add_argument("--to", dest="end", type=float, required=True)
+    p.add_argument("--out", required=True)
+    p.add_argument("--fps", type=float, default=25.0, help="output frame rate")
+    p.add_argument("--capture-fps", type=float, default=None,
+                   help="what the camera captured, where the file plays slow (S&Q)")
+    p.add_argument("--file-fps", type=float, default=25.0, help="the file's own rate")
+    p.add_argument("--segment", type=float, default=0.0,
+                   help="follow the warp in steps of about this many seconds, each "
+                        "with its own speed, instead of one speed for the shot. A "
+                        "curved map over a long shot needs this; the steps are "
+                        "continuous in the donor, so nothing jumps")
+    p.add_argument("--crf", type=int, default=16)
+    p.add_argument("--dry-run", action="store_true")
+    args = p.parse_args()
+
+    model, query, reference = read_map(args.warp)
+    want = args.end - args.start
+    if want <= 0:
+        sys.exit("lipsync-clip: --to must be after --from")
+
+    donor_in, donor_out = at(reference, query, args.start), at(reference, query, args.end)
+    donor_span = donor_out - donor_in
+    speed = donor_span / want
+    if not 0.9 < speed < 1.11:
+        sys.exit(f"lipsync-clip: that window wants {speed:.3f}x, which is not a retime "
+                 f"but a different performance -- pick another donor or a shorter window")
+
+    # Where the picture lives. A slow-motion file runs at capture/file times real.
+    real_in = donor_in + args.offset
+    slow = (args.capture_fps / args.file_fps) if args.capture_fps else 1.0
+    file_in, file_span = real_in * slow, donor_span * slow
+    factor = file_span / want
+
+    print(f"donor  {model['query']!r}  {donor_in:.3f} - {donor_out:.3f} s ({donor_span:.3f} s)")
+    print(f"clip   {args.clip}  real {real_in:.3f} - {real_in + donor_span:.3f} s")
+    print(f"speed  {speed:.4f}x against {model['reference']!r}, "
+          f"{want:.3f} s out of {donor_span:.3f} s of donor")
+
+    # What the map itself says the error is, sampled across the window.
+    worst = 0.0
+    for k in range(21):
+        t = args.start + want * k / 20
+        fitted = donor_in + (t - args.start) * speed
+        worst = max(worst, abs(at(reference, query, t) - fitted))
+    print(f"fit    worst departure from a constant speed: {worst * 1000:.0f} ms "
+          f"({worst * args.fps:.2f} frames at {args.fps:g} fps)")
+    if worst > 0.5 / args.fps:
+        print("       -- over half a frame: split the shot or pick another donor")
+
+    if args.segment > 0:
+        return piecewise(args, model, query, reference)
+
+    if args.dry_run:
+        return
+    cmd = ["ffmpeg", "-y", "-loglevel", "error",
+           "-ss", f"{file_in:.4f}", "-t", f"{file_span:.4f}", "-i", args.clip,
+           "-filter:v", f"setpts=PTS/{factor:.6f}", "-r", f"{args.fps:g}",
+           "-c:v", "libx264", "-crf", str(args.crf), "-preset", "medium",
+           "-pix_fmt", "yuv420p", "-an", args.out]
+    subprocess.run(cmd, check=True)
+    out = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                          "-of", "default=nw=1:nk=1", args.out],
+                         capture_output=True, text=True).stdout.strip()
+    print(f"wrote  {args.out}  {float(out):.3f} s (wanted {want:.3f})")
+
+
+if __name__ == "__main__":
+    main()
