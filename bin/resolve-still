@@ -1,0 +1,119 @@
+#!/usr/bin/env python3
+"""Export a frame of a Resolve timeline as it is graded, one per shot by default.
+
+    resolve-still --out stills/                      # the middle of every shot
+    resolve-still --out stills/ --at 9.6 --at 65.0   # named seconds instead
+    resolve-still --out stills/ --timeline "Fauré T22 FINAL" --track 4
+
+A grade cannot be read back: there is no GetCDL, and GetLUT returns a filename.
+The only way to know what a correction did is to look at the picture it made,
+and the only picture the API will hand over is a gallery still. So this is the
+measuring end of every grading tool here -- grab, export, and put the files
+through `frame-balance`.
+
+Stills come out of the gallery afterwards, so a project is not left with a
+hundred of them. What is exported is the timeline as graded, including the
+colour management transform, which is the thing worth measuring: the source
+file is log and tells you nothing about what an audience sees.
+"""
+
+import argparse
+import os
+import sys
+
+sys.path.append("/Library/Application Support/Blackmagic Design/DaVinci Resolve/"
+                "Developer/Scripting/Modules")
+
+
+def connect():
+    try:
+        import DaVinciResolveScript as dvr
+    except ImportError:
+        sys.exit("cannot import DaVinciResolveScript -- is Resolve installed?")
+    r = dvr.scriptapp("Resolve")
+    if r is None:
+        sys.exit("Resolve is not answering. Start it, and set Preferences > System > "
+                 "General > 'External scripting using' to Local.")
+    return r
+
+
+def timecode(frame, fps):
+    fps = int(round(fps))
+    f = int(round(frame))
+    return (f"{f // (fps * 3600):02d}:{f // (fps * 60) % 60:02d}:"
+            f"{f // fps % 60:02d}:{f % fps:02d}")
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--out", required=True, help="directory for the exported frames")
+    ap.add_argument("--timeline", help="name; default is the current one")
+    ap.add_argument("--at", type=float, action="append", default=[],
+                    help="timeline seconds; repeatable. Default: every shot's middle")
+    ap.add_argument("--track", type=int, default=0,
+                    help="with no --at, which video track's shots to sample "
+                         "(default: every track)")
+    ap.add_argument("--format", default="png")
+    args = ap.parse_args()
+
+    resolve = connect()
+    project = resolve.GetProjectManager().GetCurrentProject()
+    tl = project.GetCurrentTimeline()
+    if args.timeline:
+        tl = next((project.GetTimelineByIndex(i)
+                   for i in range(1, project.GetTimelineCount() + 1)
+                   if project.GetTimelineByIndex(i).GetName() == args.timeline), None)
+        if not tl:
+            sys.exit(f"no timeline called {args.timeline!r}")
+        project.SetCurrentTimeline(tl)
+
+    fps = float(project.GetSetting("timelineFrameRate"))
+    start = int(tl.GetStartFrame())
+
+    # The Color page is where a still comes from; grabbing on Edit returns None.
+    resolve.OpenPage("color")
+    os.makedirs(args.out, exist_ok=True)
+    album = project.GetGallery().GetCurrentStillAlbum()
+    out = os.path.abspath(args.out)
+
+    if args.at:
+        # GrabStill() takes the CURRENT CLIP, not the playhead, so parking and
+        # grabbing gives the same clip every time unless the timecode move also
+        # changes which clip the Color page has selected.
+        for t in args.at:
+            frame = start + int(round(t * fps))
+            if not tl.SetCurrentTimecode(timecode(frame, fps)):
+                print(f"  !! could not park at {t:.2f}s")
+                continue
+            still = tl.GrabStill()
+            if not still:
+                print(f"  !! no still at {t:.2f}s")
+                continue
+            ok = album.ExportStills([still], out, f"{t:07.2f}s", args.format)
+            album.DeleteStills([still])
+            print(f"  {'ok  ' if ok else 'FAIL'} {t:07.2f}s")
+        return
+
+    # One per clip, middle frame, in the Color page's own order.
+    stills = tl.GrabAllStills(2) or []
+    order = []
+    for tr in range(1, tl.GetTrackCount("video") + 1):
+        for it in (tl.GetItemListInTrack("video", tr) or []):
+            order.append((int(it.GetStart()), tr, os.path.splitext(it.GetName())[0]))
+    order.sort()
+    for i, still in enumerate(stills):
+        if i < len(order):
+            at, tr, name = order[i]
+            label = f"{i:02d}-V{tr}-{name}-{(at - start) / fps:07.2f}s"
+        else:
+            label = f"{i:02d}-unmatched"
+        ok = album.ExportStills([still], out, label, args.format)
+        print(f"  {'ok  ' if ok else 'FAIL'} {label}")
+    album.DeleteStills(stills)
+    print(f"\n{len(stills)} frames -> {args.out}  "
+          f"({len(order)} clips on the timeline)")
+
+
+if __name__ == "__main__":
+    main()

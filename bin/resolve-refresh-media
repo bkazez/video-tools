@@ -111,9 +111,17 @@ def main():
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--bin", help="only this media pool folder (exact name)")
     ap.add_argument("--ext", default=".wav",
-                    help="only clips with this extension (default .wav)")
+                    help="only clips with this extension (default .wav). The "
+                         "default covers audio only: a re-rendered .mp4 is NOT "
+                         "reloaded unless --ext .mp4 is asked for, and a picture "
+                         "clip that changed length then goes Media Offline "
+                         "wherever the timeline runs past the old duration")
     ap.add_argument("--prune-missing", action="store_true",
                     help="also delete media pool items whose file is gone")
+    ap.add_argument("--reopen", action="store_true",
+                    help="close and reopen the project afterwards, for when a "
+                         "reload alone is not believed. The frame counts before "
+                         "and after are printed, so it says whether it mattered")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
@@ -149,6 +157,23 @@ def main():
                 reloaded.add(path)
             else:
                 print(f"  FAILED    {os.path.basename(path)}", file=sys.stderr)
+
+    if args.reopen and reloaded and not args.dry_run:
+        before = {}
+        for folder in walk(pool.GetRootFolder()):
+            for clip in folder.GetClipList():
+                if clip.GetClipProperty("File Path") in reloaded:
+                    before[clip.GetName()] = clip.GetClipProperty("Frames")
+        print("\nreopening the project so changed durations are re-read")
+        project = reopen(resolve, project)
+        pool = project.GetMediaPool()
+        for folder in walk(pool.GetRootFolder()):
+            for clip in folder.GetClipList():
+                name = clip.GetName()
+                if name in before:
+                    now = clip.GetClipProperty("Frames")
+                    moved = " <- changed" if str(now) != str(before[name]) else ""
+                    print(f"  {name}  {before[name]} -> {now} frames{moved}")
 
     stale = stale_paths(reloaded)
     if stale:

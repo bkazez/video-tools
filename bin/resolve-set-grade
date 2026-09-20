@@ -98,6 +98,8 @@ def main():
     ap.add_argument("--reset", action="store_true",
                     help="ResetAllGrades() on the node graph first (use when setting a LUT)")
     ap.add_argument("--only", help="only timelines whose name contains this")
+    ap.add_argument("--clip", help="only clips whose name contains this, so one "
+                                   "angle can be trimmed without touching the rest")
     ap.add_argument("--node", type=int, default=1, help="node index (default 1)")
     ap.add_argument("--save", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
@@ -115,14 +117,17 @@ def main():
         if args.only and args.only.lower() not in timeline.GetName().lower():
             continue
         for item in video_items(timeline):
+            if args.clip and args.clip.lower() not in item.GetName().lower():
+                continue
             targets.append((timeline, item))
     if not targets:
-        sys.exit(f"resolve-set-grade: no timeline matched --only {args.only!r}")
+        sys.exit(f"resolve-set-grade: nothing matched --only {args.only!r}"
+                 + (f" --clip {args.clip!r}" if args.clip else ""))
 
     if args.dry_run:
         print(f"\nwould touch {len(targets)} clip(s):")
-        for timeline, _ in targets:
-            print(f"  {timeline.GetName()}")
+        for timeline, item in targets:
+            print(f"  {timeline.GetName()}  <- {item.GetName()}")
         print("\n--dry-run: nothing changed")
         return
 
@@ -148,7 +153,8 @@ def main():
         bad = [name for name, ok in steps if not ok]
         failed += bool(bad)
         state = "  ".join(f"{name}={'ok' if ok else 'FAILED'}" for name, ok in steps)
-        print(f"  {'  ' if not bad else '!!'} {timeline.GetName():30s} {state}")
+        print(f"  {'  ' if not bad else '!!'} {timeline.GetName():24s} "
+              f"{item.GetName():22s} {state}")
 
     if args.save:
         print(f"\nSaveProject: {resolve.GetProjectManager().SaveProject()}")

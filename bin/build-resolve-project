@@ -49,6 +49,8 @@ Spec:
           - {file: C0485.MP4,    start: 10.828, duration: 83.132, at: 4.0}
           - {file: DJI_0690.MP4, start: 250.0,  duration: 5.0,    at: 87.132}
           - {file: C0490.MP4,  start: 110.44, duration: 30.0, at: 96.4, track: 2}
+          - {file: C0489.MP4,  start: 100.0,  duration: 9.0,  at: 105.0, track: 2,
+             transform: {ZoomX: 1.9, ZoomY: 1.9, Pan: -1824, Tilt: -42}}
         markers:                    # applied to an EXISTING timeline too
           - {at: 0.0, color: Green, name: "the take", note: "why it was chosen"}
 
@@ -62,6 +64,10 @@ Spec:
 
 `start` is always REAL seconds into the clip; `at` is where it lands on the
 timeline. Omit `at` and clips are laid end to end in the order written.
+
+`transform` sets any of Resolve's sizing properties on the clip (ZoomX, ZoomY,
+Pan, Tilt, RotationAngle, CropLeft...), which is how a punch-in on a wide shot
+becomes a second angle. Pan and Tilt are in timeline pixels after the zoom.
 
 `track` puts a clip on a video track above the first, which is how a shot whose
 sync is still in doubt is handed over: it sits on its own track, the track below
@@ -298,8 +304,13 @@ def main():
             if not mp.AppendToTimeline([info]):
                 print(f"  !! could not place {c['file']}")
                 continue
+            placed = (tl.GetItemListInTrack("video", track) or [])[-1]
+            for key, value in (c.get("transform") or {}).items():
+                if not placed.SetProperty(key, float(value)):
+                    print(f"    !! {c['file']}: {key} = {value} REFUSED")
             print(f"  V{track}     {item.GetName()} frames {sf}-{ef} @{cfps:g}fps "
-                  f"({dur:.3f}s) at timeline frame {int(where)}")
+                  f"({dur:.3f}s) at timeline frame {int(where)}"
+                  + (f"  {c['transform']}" if c.get("transform") else ""))
             record[track] = where + round(dur * fps)
 
         for track in range(1, tl.GetTrackCount("video") + 1):
