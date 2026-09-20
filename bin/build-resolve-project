@@ -42,10 +42,13 @@ Spec:
         audio:
           file: "Fauré-001.wav"
           at: 4.0                   # timeline seconds; omit to lay it at the head
+        tracks:                     # optional names, by video track number
+          2: "keys -- nudge to sync"
         clips:
           - {file: DJI_0690.MP4, start: 195.0,  duration: 4.0,    at: 0.0}
           - {file: C0485.MP4,    start: 10.828, duration: 83.132, at: 4.0}
           - {file: DJI_0690.MP4, start: 250.0,  duration: 5.0,    at: 87.132}
+          - {file: C0490.MP4,  start: 110.44, duration: 30.0, at: 96.4, track: 2}
         markers:                    # applied to an EXISTING timeline too
           - {at: 0.0, color: Green, name: "the take", note: "why it was chosen"}
 
@@ -59,6 +62,12 @@ Spec:
 
 `start` is always REAL seconds into the clip; `at` is where it lands on the
 timeline. Omit `at` and clips are laid end to end in the order written.
+
+`track` puts a clip on a video track above the first, which is how a shot whose
+sync is still in doubt is handed over: it sits on its own track, the track below
+carries a shot that covers the same seconds, and moving it is a drag rather than
+a rebuild. Clips laid end to end advance their own track's position, not a
+shared one.
 """
 import argparse, glob, os, sys
 import yaml
@@ -259,12 +268,20 @@ def main():
                 where = f" from {audio['start']:g}s" if "start" in audio else ""
                 print(f"  audio  {a.GetName()}{where} at timeline frame {at}")
 
-        record = start_frame
-        for c in t.get("clips", []):
+        clips = t.get("clips", [])
+        wanted_tracks = max([int(c.get("track", 1)) for c in clips] or [1])
+        while tl.GetTrackCount("video") < wanted_tracks:
+            tl.AddTrack("video")
+        for n, label in (t.get("tracks") or {}).items():
+            tl.SetTrackName("video", int(n), str(label))
+
+        record = {}                   # per track, so end-to-end laying is per track
+        for c in clips:
             item = imported.get(os.path.basename(c["file"]))
             if not item:
                 print(f"  !! {c['file']!r} is not in any bin")
                 continue
+            track = int(c.get("track", 1))
             # startFrame/endFrame count in the CLIP's own frames, which after an
             # FPS override are real-time frames at the capture rate. recordFrame
             # counts in TIMELINE frames. Mixing the two is the usual bug here.
@@ -272,20 +289,23 @@ def main():
             sf = int(round(float(c.get("start", 0)) * cfps))
             dur = float(c.get("duration", 0))
             ef = sf + int(round(dur * cfps)) - 1
+            where = record.get(track, start_frame)
             if "at" in c:
-                record = start_frame + round(float(c["at"]) * fps)
-            info = {"mediaPoolItem": item, "mediaType": 1, "trackIndex": 1,
+                where = start_frame + round(float(c["at"]) * fps)
+            info = {"mediaPoolItem": item, "mediaType": 1, "trackIndex": track,
                     "startFrame": sf, "endFrame": ef,
-                    "recordFrame": int(round(record))}
+                    "recordFrame": int(round(where))}
             if not mp.AppendToTimeline([info]):
                 print(f"  !! could not place {c['file']}")
                 continue
-            print(f"  video  {item.GetName()} frames {sf}-{ef} @{cfps:g}fps "
-                  f"({dur:.3f}s) at timeline frame {int(record)}")
-            record += round(dur * fps)
+            print(f"  V{track}     {item.GetName()} frames {sf}-{ef} @{cfps:g}fps "
+                  f"({dur:.3f}s) at timeline frame {int(where)}")
+            record[track] = where + round(dur * fps)
 
-        got = tl.GetItemListInTrack("video", 1) or []
-        print(f"  -> {len(got)} video items, timeline duration "
+        for track in range(1, tl.GetTrackCount("video") + 1):
+            got = tl.GetItemListInTrack("video", track) or []
+            print(f"  -> V{track}: {len(got)} items")
+        print(f"  -> timeline duration "
               f"{(int(tl.GetEndFrame()) - start_frame) / fps:.3f}s")
         set_markers(tl, t.get("markers"), fps)
 
