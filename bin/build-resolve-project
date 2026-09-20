@@ -244,9 +244,20 @@ def main():
                 print(f"  !! audio {audio['file']!r} is not in any bin")
             else:
                 at = start_frame + int(round(float(audio.get("at", 0)) * fps))
-                mp.AppendToTimeline([{"mediaPoolItem": a, "mediaType": 2,
-                                      "trackIndex": 1, "recordFrame": at}])
-                print(f"  audio  {a.GetName()} at timeline frame {at}")
+                info = {"mediaPoolItem": a, "mediaType": 2, "trackIndex": 1,
+                        "recordFrame": at}
+                # An audio start/duration is in the FILE's own seconds. Without
+                # this the take plays from its first sample, which is where the
+                # talking before a take lives.
+                if "start" in audio or "duration" in audio:
+                    afps = float(a.GetClipProperty("FPS") or fps)
+                    sf = int(round(float(audio.get("start", 0)) * afps))
+                    info["startFrame"] = sf
+                    if "duration" in audio:
+                        info["endFrame"] = sf + int(round(float(audio["duration"]) * afps)) - 1
+                mp.AppendToTimeline([info])
+                where = f" from {audio['start']:g}s" if "start" in audio else ""
+                print(f"  audio  {a.GetName()}{where} at timeline frame {at}")
 
         record = start_frame
         for c in t.get("clips", []):
