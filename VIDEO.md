@@ -8,3 +8,6 @@ Notes for working on picture, as MIXING.md is for sound.
   A clip with an FPS override — 50 fps S&Q footage in a 25 fps timeline —
   reports half the number its own rate would give, so dividing by the clip's
   FPS reads every source in-point at half its real value.
+- `AppendToTimeline` honours `startFrame` on video and **ignores it on audio**.
+  A film that must open past the talking at the head of a take gets there by
+  rendering the audio already trimmed, not by trimming it in the timeline.
