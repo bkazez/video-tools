@@ -1,0 +1,146 @@
+#!/usr/bin/env python3
+"""Pin a warp map to the syllables, so a retimed shot fits consonant by consonant.
+
+    warp-refine --warp warp.json --query raw-t6.wav --reference raw-t22.wav \
+                --out warp-pinned.json --from 10 --to 80
+
+`arc warp` aligns two takes globally and lands within a few tens of
+milliseconds on average. That is not the same as landing on every syllable: on
+legato singing the map drifted up to 218 ms at individual onsets while its
+median error was 7 ms, and a fifth of a second is five frames of lips saying
+something the sound is not saying yet.
+
+This finds the onsets in both takes, pairs the ones the map already brings
+close, and bends the map so each pair meets exactly. Between anchors it
+interpolates, outside them it leaves the map alone, and it refuses any
+correction that would make the map run backwards -- a retime that reverses is
+worse than one that is late.
+
+A pairing is only used when it is unambiguous: the nearest onset in the query
+has to be at least twice as close as the next nearest, so a syllable matched to
+its neighbour cannot drag the map onto the wrong word.
+
+Feed the UNPROCESSED spot, not a mix and not a processed stem. A de-esser works
+on exactly the sibilance this reads.
+"""
+
+import argparse
+import bisect
+import json
+import subprocess
+import sys
+
+import numpy as np
+
+
+def envelope(path, sr=16000, hop=0.005):
+    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", path,
+                          "-af", f"aresample={sr}", "-ac", "1", "-f", "f32le", "-"],
+                         capture_output=True).stdout
+    x = np.frombuffer(raw, dtype=np.float32)
+    h = int(sr * hop)
+    n = len(x) // h
+    e = np.abs(x[:n * h].reshape(n, h)).max(axis=1)
+    return np.arange(n) * hop, 20 * np.log10(e + 1e-9)
+
+
+def onsets(path, rise_db, floor_db, gap=0.12):
+    t, db = envelope(path)
+    out = []
+    for i in range(10, len(t) - 4):
+        peak = db[i:i + 3].max()
+        if peak - db[i - 8:i - 1].max() > rise_db and peak > floor_db:
+            if not out or t[i] - out[-1] > gap:
+                out.append(float(t[i]))
+    return np.array(out)
+
+
+def at(reference, query, t):
+    i = bisect.bisect_left(reference, t)
+    i = max(1, min(i, len(reference) - 1))
+    span = reference[i] - reference[i - 1]
+    f = (t - reference[i - 1]) / span if span > 0 else 0.0
+    return query[i - 1] + f * (query[i] - query[i - 1])
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--warp", required=True)
+    ap.add_argument("--query", required=True, help="the donor take's unprocessed spot")
+    ap.add_argument("--reference", required=True, help="the released take's unprocessed spot")
+    ap.add_argument("--out", required=True)
+    ap.add_argument("--from", dest="start", type=float, default=0.0)
+    ap.add_argument("--to", dest="end", type=float, default=1e9)
+    ap.add_argument("--rise", type=float, default=4.0, help="dB that counts as an onset")
+    ap.add_argument("--floor", type=float, default=-40.0, help="dBFS an onset must reach")
+    ap.add_argument("--max-shift", type=float, default=0.25,
+                    help="seconds; a pairing further apart than this is not a pairing")
+    ap.add_argument("--dry-run", action="store_true")
+    args = ap.parse_args()
+
+    model = json.load(open(args.warp))
+    query, reference = model["map"]
+
+    qo = onsets(args.query, args.rise, args.floor)
+    ro = onsets(args.reference, args.rise, args.floor)
+    print(f"onsets {len(qo)} in the donor, {len(ro)} in the reference")
+
+    anchors = []
+    for t in ro:
+        if not (args.start <= t <= args.end):
+            continue
+        pred = at(reference, query, t)
+        d = np.abs(qo - pred)
+        j = int(np.argmin(d))
+        if d[j] > args.max_shift:
+            continue
+        second = np.partition(d, 1)[1] if len(d) > 1 else 1e9
+        if second < 2 * d[j]:           # ambiguous: two onsets equally close
+            continue
+        anchors.append((t, float(qo[j]) - pred))
+    if not anchors:
+        sys.exit("warp-refine: nothing paired -- check the stems are the same take")
+
+    err = np.array([a[1] for a in anchors])
+    print(f"anchors {len(anchors)} unambiguous; before: median {np.median(err) * 1000:+.0f} ms, "
+          f"p90 {np.percentile(np.abs(err), 90) * 1000:.0f} ms, max {np.abs(err).max() * 1000:.0f} ms")
+
+    at_t = np.array([a[0] for a in anchors])
+    corrected = list(query)
+    ref = np.asarray(reference)
+    shift = np.interp(ref, at_t, err, left=0.0, right=0.0)
+    # Taper to nothing before the first anchor and after the last, so the map is
+    # untouched where nothing was measured.
+    shift[ref < at_t[0]] = 0.0
+    shift[ref > at_t[-1]] = 0.0
+    new = np.asarray(corrected) + shift
+
+    # A map that runs backwards would play the picture backwards. Where the
+    # correction inverts it, keep the original ordering.
+    bad = int((np.diff(new) < 0).sum())
+    if bad:
+        new = np.maximum.accumulate(new)
+        print(f"       {bad} segment(s) would have run backwards; clamped")
+
+    # Re-measure against the corrected map exactly as it was measured before.
+    after = []
+    for t, _ in anchors:
+        pred = at(reference, list(new), t)
+        d = np.abs(qo - pred)
+        after.append(float(qo[int(np.argmin(d))]) - pred)
+    a = np.array(after)
+    print(f"        after: median {np.median(a) * 1000:+.0f} ms, "
+          f"p90 {np.percentile(np.abs(a), 90) * 1000:.0f} ms, max {np.abs(a).max() * 1000:.0f} ms")
+
+    if args.dry_run:
+        return
+    model["map"] = [list(new), list(reference)]
+    model["refined_anchors"] = len(anchors)
+    with open(args.out, "w") as fh:
+        json.dump(model, fh)
+    print(f"wrote  {args.out}")
+
+
+if __name__ == "__main__":
+    main()

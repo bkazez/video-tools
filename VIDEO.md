@@ -87,3 +87,23 @@ on four sung entries -- same frame in each.
 **Verify by rendering**, not with a still grab: `GrabStill` takes the current
 clip rather than the playhead, so it will happily report a different shot
 entirely -- here it returned the keys while the question was about the closeup.
+
+## A global alignment is not lip sync
+
+`arc warp` puts two takes on one clock and is right on average: across a 70 s
+shot its median error at syllable onsets was 7 ms. It was also 218 ms wrong at
+the worst one, which is five frames of lips out of step, and an average is no
+defence against that.
+
+So measure the thing that matters -- the error AT each onset, not the average
+-- and pin the map to it. `warp-refine` finds onsets in both takes' unprocessed
+spot, pairs the unambiguous ones, and bends the map so each pair meets: worst
+error 218 ms to 85 ms on one shot, 208 ms to 112 ms on another.
+
+Feed it the spot with its channel bypassed. A de-esser attenuates exactly the
+sibilance an onset detector reads, and on this session the processed stem
+nulled only 0.6 dB under the raw one.
+
+Expect few anchors on legato singing: 26 in 70 s, and only two hard consonants
+in the whole shot. That scarcity is also why picture-motion correlation keeps
+coming back weak on this material -- there is very little to correlate.
