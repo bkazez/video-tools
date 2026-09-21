@@ -35,3 +35,22 @@ Build a multi-angle edit that way rather than as one row of cuts:
 - Resolve's scripting API has no multicam-clip constructor (`README.txt` under
   `Developer/Scripting` lists none), so a built project gets the stack and not
   the multicam clip. Converting one afterwards is by hand in the Media Pool.
+
+## Checking a camera offset without camera audio
+
+A roll has ONE constant. If the camera ran continuously across several takes,
+then for every take on it
+
+    camera clock - recorder clock = region start - measured offset
+
+is the same number, so N takes give N estimates of one value and a wrong one is
+visible without any further measurement. On a session where five takes agreed
+inside 0.2 s, a sixth alignment 1.4 s out was a stale duplicate timeline, and
+two hours went into measuring what that comparison answers in a minute.
+
+Do that first. Only then reach for `motion-sync`, and read what it says about
+itself: it refines a guess inside a few seconds and returns a confident wrong
+answer over a whole clip. Correlating picture motion against loudness over a
+wide search is the mistake it is warning about -- on legato singing it peaked
+2.6 s from the truth with r = 0.09, while the same tool given a 6 s window
+landed 0.24 s away with r = 0.21.
