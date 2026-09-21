@@ -45,6 +45,76 @@ def at(reference, query, t):
     return query[i - 1] + f * (query[i] - query[i - 1])
 
 
+def frame_exact(args, model, query, reference):
+    """One donor frame chosen per output frame, in a single decode pass.
+
+    The piecewise path renders each step with its own ffmpeg, so asking for a
+    step per output frame means one process and one seek per frame -- minutes
+    of seeking into a 4K file to emit 40 ms. This instead decodes the donor
+    span once, streams it, and picks the nearest captured frame for every
+    output frame. The map is followed exactly: there is no constant-speed
+    approximation left to depart from, and the only error is half a captured
+    frame, 10 ms on 50 fps footage.
+
+    Nothing is resampled or blended, so the picture is as sharp as the source
+    and a frame is only ever repeated or dropped -- which on a 3% rate
+    difference happens rarely enough not to read as judder.
+    """
+    import subprocess as sp
+    probe = sp.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
+                    "-show_entries", "stream=width,height",
+                    "-of", "csv=p=0:s=x", args.clip],
+                   capture_output=True, text=True).stdout.strip()
+    w, h = (int(v) for v in probe.split("x"))
+    capture = args.capture_fps or args.file_fps
+
+    n = int(round((args.end - args.start) * args.fps))
+    wanted = []
+    for k in range(n):
+        t = args.start + k / args.fps
+        donor = at(reference, query, t)
+        wanted.append(int(round((donor + args.offset) * capture)))
+    lo, hi = wanted[0], wanted[-1]
+    repeats = sum(1 for a, b in zip(wanted, wanted[1:]) if a == b)
+    print(f"frames {n} out of {hi - lo + 1} donor frames at {capture:g} fps; "
+          f"{repeats} repeated, {hi - lo + 1 - (n - repeats)} dropped")
+    print(f"error  half a captured frame, {500 / capture:.0f} ms")
+    if args.dry_run:
+        return
+
+    # The file plays at file_fps while holding capture_fps frames per real
+    # second, so its own timeline runs slow by exactly that ratio.
+    seek = lo / capture * (capture / args.file_fps)
+    size = w * h * 3 // 2
+    src = sp.Popen(["ffmpeg", "-loglevel", "error", "-ss", f"{seek:.4f}",
+                    "-i", args.clip, "-vf", f"format=yuv420p",
+                    "-f", "rawvideo", "-"], stdout=sp.PIPE)
+    dst = sp.Popen(["ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo",
+                    "-pix_fmt", "yuv420p", "-s", f"{w}x{h}",
+                    "-r", f"{args.fps:g}", "-i", "-",
+                    "-c:v", "libx264", "-crf", str(args.crf), "-preset", "medium",
+                    "-pix_fmt", "yuv420p", "-an", args.out], stdin=sp.PIPE)
+    have, frame = lo - 1, None
+    try:
+        for want in wanted:
+            while have < want:
+                buf = src.stdout.read(size)
+                if len(buf) < size:
+                    raise RuntimeError(f"donor ran out at frame {have}")
+                frame, have = buf, have + 1
+            dst.stdin.write(frame)
+    finally:
+        dst.stdin.close()
+        src.stdout.close()
+        src.wait()
+        dst.wait()
+    out = sp.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                  "-of", "default=nw=1:nk=1", args.out],
+                 capture_output=True, text=True).stdout.strip()
+    print(f"wrote  {args.out}  {float(out):.3f} s "
+          f"(wanted {args.end - args.start:.3f})")
+
+
 def piecewise(args, model, query, reference):
     """One speed per segment, so a curved map is followed rather than averaged."""
     import os
@@ -116,6 +186,12 @@ def main():
                         "with its own speed, instead of one speed for the shot. A "
                         "curved map over a long shot needs this; the steps are "
                         "continuous in the donor, so nothing jumps")
+    p.add_argument("--frame-exact", action="store_true",
+                   help="follow the map frame by frame in one decode pass, which "
+                        "is what a shot has to do for consonants to land. Nothing "
+                        "is blended: each output frame is the nearest captured "
+                        "one, so the error is half a captured frame and no "
+                        "constant-speed approximation is left")
     p.add_argument("--crf", type=int, default=16)
     p.add_argument("--dry-run", action="store_true")
     args = p.parse_args()
@@ -153,6 +229,9 @@ def main():
           f"({worst * args.fps:.2f} frames at {args.fps:g} fps)")
     if worst > 0.5 / args.fps:
         print("       -- over half a frame: split the shot or pick another donor")
+
+    if args.frame_exact:
+        return frame_exact(args, model, query, reference)
 
     if args.segment > 0:
         return piecewise(args, model, query, reference)
