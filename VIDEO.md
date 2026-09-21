@@ -76,11 +76,26 @@ an H.264 intermediate, and the curve is visible in the Fusion page. Rendering
 cost nothing measurable -- 212 s of timeline took 19 s with the comp against 25
 s without.
 
-The one thing it cannot do is address a frame the timeline rate cannot reach:
-50 fps S&Q footage conformed to a 25 fps timeline rounds `SourceTime` to 20 ms,
-where `lipsync-clip --frame-exact` picks captured frames at 10 ms. Both are
-well inside a 25 fps frame, and the two routes were checked against each other
-on four sung entries -- same frame in each.
+**It is not usable yet, and the reason is not understood.** A comp carrying a
+real retime curve renders clean for the first half of the shot and then holds
+one frame to the end -- 32 s of freeze on a 71 s shot, starting at the same
+place at every keyframe density tried, from 46 keys to 1780. A two-keyframe
+straight line through the same endpoints plays clean, and the spline reads back
+out of Resolve byte for byte identical to what went in, so the curve is not
+what is wrong. Until that is understood, the retime goes through
+`lipsync-clip --frame-exact` and the film carries a rendered intermediate.
+
+It also cannot address a frame the timeline rate cannot reach: 50 fps S&Q
+footage conformed to a 25 fps timeline rounds `SourceTime` to 20 ms, where
+`--frame-exact` picks captured frames at 10 ms.
+
+**Check a retime for freezes, always, and give the check a control.** A frozen
+stretch is invisible in a spot check -- four frames sampled across it looked
+different to the eye and were numerically identical -- and a threshold picked
+without a control is worthless: on this dark picture a plain one called 30 s of
+ordinary motion a freeze. Compare frame to frame against the shot's own median
+difference, and run the same measure over an unretimed clip to see it come back
+clean.
 
 **Get the comp's shape by exporting one, never by guessing it:** add a comp with
 `AddFusionComp()`, `ExportFusionComp(path, 1)`, and edit what comes out.

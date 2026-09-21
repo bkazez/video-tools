@@ -55,6 +55,34 @@ def onsets(path, rise_db, floor_db, gap=0.12):
     return np.array(out)
 
 
+def monotone(points):
+    """Fritsch-Carlson through the anchors: smooth, and it cannot run backwards."""
+    xs = np.array([p[0] for p in points], float)
+    ys = np.array([p[1] for p in points], float)
+    h, d = np.diff(xs), np.diff(ys) / np.diff(xs)
+    m = np.zeros_like(xs)
+    m[1:-1] = (d[:-1] + d[1:]) / 2
+    m[0], m[-1] = d[0], d[-1]
+    for i in range(len(d)):
+        if d[i] == 0:
+            m[i] = m[i + 1] = 0
+        else:
+            a, b = m[i] / d[i], m[i + 1] / d[i]
+            if a * a + b * b > 9:
+                t = 3.0 / np.sqrt(a * a + b * b)
+                m[i], m[i + 1] = t * a * d[i], t * b * d[i]
+
+    def curve(x):
+        x = np.clip(np.asarray(x, float), xs[0], xs[-1])
+        i = np.clip(np.searchsorted(xs, x, side="right") - 1, 0, len(xs) - 2)
+        u = (x - xs[i]) / h[i]
+        u2, u3 = u * u, u * u * u
+        return ((2 * u3 - 3 * u2 + 1) * ys[i] + (u3 - 2 * u2 + u) * h[i] * m[i]
+                + (-2 * u3 + 3 * u2) * ys[i + 1] + (u3 - u2) * h[i] * m[i + 1])
+
+    return curve
+
+
 def at(reference, query, t):
     i = bisect.bisect_left(reference, t)
     i = max(1, min(i, len(reference) - 1))
@@ -76,6 +104,16 @@ def main():
     ap.add_argument("--floor", type=float, default=-40.0, help="dBFS an onset must reach")
     ap.add_argument("--max-shift", type=float, default=0.25,
                     help="seconds; a pairing further apart than this is not a pairing")
+    ap.add_argument("--min-speed", type=float, default=0.85,
+                    help="slowest the corrected map may run. Below about 0.85 the "
+                         "retime is visible, and at 0 it is a freeze")
+    ap.add_argument("--max-speed", type=float, default=1.18)
+    ap.add_argument("--smooth", type=float, default=1.5,
+                    help="seconds over which to average the map's speed before "
+                         "anchoring. A DTW map moves in whole steps -- half "
+                         "speed, same speed, double speed -- and followed frame "
+                         "by frame those steps are stutter and freeze, not "
+                         "timing. Below about 0.5 they start to show")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
@@ -86,7 +124,13 @@ def main():
     ro = onsets(args.reference, args.rise, args.floor)
     print(f"onsets {len(qo)} in the donor, {len(ro)} in the reference")
 
-    anchors = []
+    # The DTW path's job here is only to say which onset goes with which. Its
+    # own shape is not usable as timing: the path moves in whole steps, so its
+    # speed reads 0.5x, 1x or 2x and nothing between, and a retime that follows
+    # it frame by frame reproduces those steps as stutter and as freezes. On
+    # this shot it held at half speed for 39 segments and skipped at double for
+    # 94, about 93 ms each.
+    pairs = []
     for t in ro:
         if not (args.start <= t <= args.end):
             continue
@@ -98,45 +142,66 @@ def main():
         second = np.partition(d, 1)[1] if len(d) > 1 else 1e9
         if second < 2 * d[j]:           # ambiguous: two onsets equally close
             continue
-        anchors.append((t, float(qo[j]) - pred))
-    if not anchors:
-        sys.exit("warp-refine: nothing paired -- check the stems are the same take")
+        pairs.append((float(t), float(qo[j])))
+    if len(pairs) < 3:
+        sys.exit(f"warp-refine: only {len(pairs)} onsets paired -- not a curve")
 
-    err = np.array([a[1] for a in anchors])
-    print(f"anchors {len(anchors)} unambiguous; before: median {np.median(err) * 1000:+.0f} ms, "
-          f"p90 {np.percentile(np.abs(err), 90) * 1000:.0f} ms, max {np.abs(err).max() * 1000:.0f} ms")
+    before = np.array([q - at(reference, query, r) for r, q in pairs])
+    print(f"paired {len(pairs)} onsets unambiguously; the map misses them by "
+          f"median {np.median(before) * 1000:+.0f} ms, "
+          f"p90 {np.percentile(np.abs(before), 90) * 1000:.0f} ms, "
+          f"max {np.abs(before).max() * 1000:.0f} ms")
 
-    at_t = np.array([a[0] for a in anchors])
-    corrected = list(query)
-    ref = np.asarray(reference)
-    shift = np.interp(ref, at_t, err, left=0.0, right=0.0)
-    # Taper to nothing before the first anchor and after the last, so the map is
-    # untouched where nothing was measured.
-    shift[ref < at_t[0]] = 0.0
-    shift[ref > at_t[-1]] = 0.0
-    new = np.asarray(corrected) + shift
+    # Two performances of the same music drift by a few percent over seconds.
+    # A pair implying more than that is a syllable matched to its neighbour,
+    # and one bad pair bends the curve through everything near it.
+    kept = [pairs[0]]
+    for r, q in pairs[1:]:
+        dr, dq = r - kept[-1][0], q - kept[-1][1]
+        if dr > 0 and args.min_speed <= dq / dr <= args.max_speed:
+            kept.append((r, q))
+    if len(kept) < len(pairs):
+        print(f"       dropped {len(pairs) - len(kept)} pair(s) implying a speed "
+              f"outside {args.min_speed:g}-{args.max_speed:g}")
+    pairs = kept
 
-    # A map that runs backwards would play the picture backwards. Where the
-    # correction inverts it, keep the original ordering.
-    bad = int((np.diff(new) < 0).sum())
-    if bad:
-        new = np.maximum.accumulate(new)
-        print(f"       {bad} segment(s) would have run backwards; clamped")
+    # Carry the map's own answer at the ends, so the curve is defined where no
+    # onset was found and joins what came before.
+    lo, hi = args.start, min(args.end, reference[-1])
+    knots = ([(lo, at(reference, query, lo))] if pairs[0][0] - lo > 0.5 else []) \
+        + pairs + ([(hi, at(reference, query, hi))] if hi - pairs[-1][0] > 0.5 else [])
 
-    # Re-measure against the corrected map exactly as it was measured before.
-    after = []
-    for t, _ in anchors:
-        pred = at(reference, list(new), t)
-        d = np.abs(qo - pred)
-        after.append(float(qo[int(np.argmin(d))]) - pred)
-    a = np.array(after)
-    print(f"        after: median {np.median(a) * 1000:+.0f} ms, "
-          f"p90 {np.percentile(np.abs(a), 90) * 1000:.0f} ms, max {np.abs(a).max() * 1000:.0f} ms")
+    curve = monotone(knots)
+    grid = np.arange(reference[0], reference[-1], 0.02)
+    inside = (grid >= knots[0][0]) & (grid <= knots[-1][0])
+    walked = np.interp(grid, reference, query)
+    walked[inside] = curve(grid[inside])
+    # Outside the anchors the map is untouched, so join the two without a step.
+    for edge, sign in ((knots[0][0], -1), (knots[-1][0], 1)):
+        step = curve(np.array([edge]))[0] - np.interp(edge, reference, query)
+        side = grid < edge if sign < 0 else grid > edge
+        blend = np.clip(1 - np.abs(grid[side] - edge) / 1.0, 0, 1)
+        walked[side] += step * blend
+
+    # Only inside the anchors: outside them the map is left alone, staircase
+    # and all, and reporting that would describe frames nobody is using.
+    speed = np.gradient(walked, grid)[inside]
+    print(f"speed  {speed.min():.3f}x to {speed.max():.3f}x "
+          f"over {knots[0][0]:.1f}-{knots[-1][0]:.1f} s, the anchored span")
+    if speed.min() < args.min_speed or speed.max() > args.max_speed:
+        print(f"       !! outside {args.min_speed:g}-{args.max_speed:g}: "
+              f"the picture will lurch or freeze there")
+
+    after = np.array([q - np.interp(r, grid, walked) for r, q in pairs])
+    print(f"       the curve misses them by median {np.median(after) * 1000:+.0f} ms, "
+          f"p90 {np.percentile(np.abs(after), 90) * 1000:.0f} ms, "
+          f"max {np.abs(after).max() * 1000:.0f} ms")
+    new, reference = list(walked), list(grid)
 
     if args.dry_run:
         return
     model["map"] = [list(new), list(reference)]
-    model["refined_anchors"] = len(anchors)
+    model["refined_anchors"] = len(pairs)
     with open(args.out, "w") as fh:
         json.dump(model, fh)
     print(f"wrote  {args.out}")

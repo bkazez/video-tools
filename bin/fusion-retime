@@ -28,6 +28,8 @@ import json
 import os
 import sys
 
+import numpy as np
+
 sys.path.append("/Library/Application Support/Blackmagic Design/DaVinci Resolve/"
                 "Developer/Scripting/Modules")
 
@@ -113,6 +115,15 @@ def main():
     ap.add_argument("--interpolate", action="store_true",
                     help="let Fusion make frames between captured ones rather than "
                          "holding the nearest; needs the clip's RetimeProcess set")
+    ap.add_argument("--every", type=int, default=4,
+                    help="write a keyframe every N output frames rather than all "
+                         "of them. Fusion stops evaluating a spline of this "
+                         "length somewhere under a thousand keys and holds the "
+                         "last value it reached -- a 1780-key curve froze the "
+                         "picture from frame 955 to the end while reading back "
+                         "byte for byte correct. The keys are linear, so what "
+                         "this costs is the curve's departure from a straight "
+                         "line over N frames, and that is printed")
     ap.add_argument("--out", help="also write the .comp here, for reading")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
@@ -151,10 +162,34 @@ def main():
         worst = max(worst, abs(v - round(v)) / fps)
     print(f"curve  {n} keyframes, {keys[0][1]:.2f} to {keys[-1][1]:.2f}; "
           f"worst rounding to a whole frame {worst * 1000:.0f} ms")
-    speed = (keys[-1][1] - keys[0][1]) / (n - 1)
-    print(f"speed  {speed:.4f}x average")
+    steps = [b[1] - a[1] for a, b in zip(keys, keys[1:])]
+    lo, hi = min(steps), max(steps)
+    print(f"speed  {(keys[-1][1] - keys[0][1]) / (n - 1):.4f}x average, "
+          f"{lo:.3f}x to {hi:.3f}x frame to frame")
+    if lo < 0.5 or hi > 1.6:
+        # A DTW map moves in whole steps and reads 0.5x, 1x or 2x; followed
+        # frame by frame that is a freeze and a skip, not timing. warp-refine
+        # is what turns such a map into a curve.
+        print("       !! that is a stutter, not a retime -- run the map through "
+              "warp-refine first")
     if args.dry_run:
         return
+
+    thinned = [keys[i] for i in range(0, len(keys), max(1, args.every))]
+    if thinned[-1][0] != keys[-1][0]:
+        thinned.append(keys[-1])
+    if len(thinned) < len(keys):
+        # What the thinning costs: the worst gap between the curve and the
+        # straight line the comp will draw between the keys that survive.
+        kx = [k for k, _ in thinned]
+        kv = [v for _, v in thinned]
+        drift = max(abs(v - float(np.interp(k, kx, kv))) for k, v in keys)
+        print(f"thin   {len(keys)} keys to {len(thinned)}, one every {args.every}; "
+              f"straight lines between them depart by {drift / fps * 1000:.0f} ms "
+              f"at worst")
+        if len(thinned) > 900:
+            print("       !! still near the length Fusion stops evaluating at")
+    keys = thinned
 
     lines = []
     for i, (k, v) in enumerate(keys):
