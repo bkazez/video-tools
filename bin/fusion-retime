@@ -1,0 +1,181 @@
+#!/usr/bin/env python3
+"""Retime a timeline clip inside Resolve, from an arc warp map, with no re-encode.
+
+    fusion-retime --warp warp.json --timeline "Fauré T22 FINAL" --track 5 --index 1 \
+                  --offset 25.800 --from 8.4 --at 5.8 --capture-fps 50
+
+`lipsync-clip` answers the same question by rendering a new file, which costs a
+4K encode and takes the grade off the camera original. This puts the curve in
+Resolve instead: a Fusion composition holding one TimeStretcher whose SourceTime
+is keyed per output frame, written as text and pushed with ImportFusionComp. The
+clip on the timeline stays the camera's own media, the grade runs on it, and the
+curve is visible in the Fusion page where it can be nudged by hand.
+
+Resolve's API cannot set a retime curve directly -- it exposes RetimeProcess,
+which picks the interpolation method, and nothing that sets a speed or a
+keyframe. The Fusion comp is the way in, and it takes as many keyframes as the
+map has frames.
+
+`--from` is where the shot starts on the REFERENCE take's clock, `--at` where it
+starts on the timeline, and `--offset` the donor camera's own offset, the same
+three numbers lipsync-clip takes. The clip must already be on the timeline,
+carrying the donor's media and long enough to cover the donor span.
+"""
+
+import argparse
+import bisect
+import json
+import os
+import sys
+
+sys.path.append("/Library/Application Support/Blackmagic Design/DaVinci Resolve/"
+                "Developer/Scripting/Modules")
+
+COMP = """Composition {
+\tCurrentTime = 0,
+\tRenderRange = { 0, %(last)d },
+\tGlobalRange = { 0, %(last)d },
+\tCurrentID = 3,
+\tHiQ = true,
+\tVersion = "fusion-retime",
+\tTools = {
+\t\tMediaIn1 = Loader {
+\t\t\tInputs = {
+\t\t\t\tLayer = Input { Value = "0", },
+\t\t\t},
+\t\t},
+\t\tTimeStretcher1 = TimeStretcher {
+\t\t\tInputs = {
+\t\t\t\tSourceTime = Input {
+\t\t\t\t\tSourceOp = "TimeStretcher1SourceTime",
+\t\t\t\t\tSource = "Value",
+\t\t\t\t},
+\t\t\t\tInput = Input {
+\t\t\t\t\tSourceOp = "MediaIn1",
+\t\t\t\t\tSource = "Output",
+\t\t\t\t},
+\t\t\t\tInterpolateBetweenFrames = Input { Value = %(interp)d, },
+\t\t\t},
+\t\t},
+\t\tTimeStretcher1SourceTime = BezierSpline {
+\t\t\tSplineColor = { Red = 173, Green = 255, Blue = 47 },
+\t\t\tNameSet = true,
+\t\t\tKeyFrames = {
+%(keys)s
+\t\t\t}
+\t\t},
+\t\tMediaOut1 = Saver {
+\t\t\tInputs = {
+\t\t\t\tIndex = Input { Value = "0", },
+\t\t\t\tInput = Input {
+\t\t\t\t\tSourceOp = "TimeStretcher1",
+\t\t\t\t\tSource = "Output",
+\t\t\t\t}
+\t\t\t},
+\t\t}
+\t}
+}
+"""
+
+
+def connect():
+    try:
+        import DaVinciResolveScript as dvr
+    except ImportError:
+        sys.exit("fusion-retime: Resolve's scripting module is not on the path")
+    r = dvr.scriptapp("Resolve")
+    if not r:
+        sys.exit("fusion-retime: Resolve is not running")
+    return r
+
+
+def at(reference, query, t):
+    i = bisect.bisect_left(reference, t)
+    i = max(1, min(i, len(reference) - 1))
+    span = reference[i] - reference[i - 1]
+    f = (t - reference[i - 1]) / span if span > 0 else 0.0
+    return query[i - 1] + f * (query[i] - query[i - 1])
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--warp", required=True, help="arc warp --json, donor as QUERY")
+    ap.add_argument("--timeline", required=True)
+    ap.add_argument("--track", type=int, default=1)
+    ap.add_argument("--index", type=int, default=1, help="which clip on that track, 1-based")
+    ap.add_argument("--offset", type=float, required=True,
+                   help="clip real seconds when the donor take's audio is at 0")
+    ap.add_argument("--from", dest="start", type=float, required=True,
+                   help="reference take seconds at the first frame of the clip")
+    ap.add_argument("--capture-fps", type=float, default=None,
+                    help="what the camera captured, where the file plays slow (S&Q)")
+    ap.add_argument("--interpolate", action="store_true",
+                    help="let Fusion make frames between captured ones rather than "
+                         "holding the nearest; needs the clip's RetimeProcess set")
+    ap.add_argument("--out", help="also write the .comp here, for reading")
+    ap.add_argument("--dry-run", action="store_true")
+    args = ap.parse_args()
+
+    model = json.load(open(args.warp))
+    query, reference = model["map"]
+
+    resolve = connect()
+    project = resolve.GetProjectManager().GetCurrentProject()
+    tl = next((project.GetTimelineByIndex(i)
+               for i in range(1, project.GetTimelineCount() + 1)
+               if project.GetTimelineByIndex(i).GetName() == args.timeline), None)
+    if not tl:
+        sys.exit(f"fusion-retime: no timeline called {args.timeline!r}")
+    project.SetCurrentTimeline(tl)
+    items = tl.GetItemListInTrack("video", args.track) or []
+    if len(items) < args.index:
+        sys.exit(f"fusion-retime: track {args.track} has {len(items)} clips")
+    item = items[args.index - 1]
+
+    fps = float(project.GetSetting("timelineFrameRate"))
+    n = int(item.GetDuration())
+    # The clip's own first frame, in its media's frames. GetLeftOffset is in
+    # TIMELINE frames (VIDEO.md), which is the space SourceTime counts in too.
+    left = int(item.GetLeftOffset())
+    print(f"clip   {item.GetName()}  {n} frames, left offset {left} ({left / fps:.3f}s)")
+
+    keys, worst = [], 0.0
+    for k in range(n):
+        t = args.start + k / fps
+        donor_real = at(reference, query, t) + args.offset
+        # SourceTime counts in the comp's own frames, which run at the timeline
+        # rate; frame 0 of the comp is the clip's first frame.
+        v = donor_real * fps - left
+        keys.append((k, v))
+        worst = max(worst, abs(v - round(v)) / fps)
+    print(f"curve  {n} keyframes, {keys[0][1]:.2f} to {keys[-1][1]:.2f}; "
+          f"worst rounding to a whole frame {worst * 1000:.0f} ms")
+    speed = (keys[-1][1] - keys[0][1]) / (n - 1)
+    print(f"speed  {speed:.4f}x average")
+    if args.dry_run:
+        return
+
+    lines = []
+    for i, (k, v) in enumerate(keys):
+        flags = "Flags = { Linear = true }"
+        lines.append(f"\t\t\t\t[{k}] = {{ {v:.4f}, {flags} }}"
+                     + ("," if i < len(keys) - 1 else ""))
+    text = COMP % {"last": n - 1, "keys": "\n".join(lines),
+                   "interp": 1 if args.interpolate else 0}
+
+    path = args.out or os.path.join(os.path.expanduser("~/Movies"), "fusion-retime.comp")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as fh:
+        fh.write(text)
+
+    for name in (item.GetFusionCompNameList() or []):
+        item.DeleteFusionCompByName(name)
+    comp = item.ImportFusionComp(path)
+    print(f"comp   {'imported' if comp else 'IMPORT FAILED'} from {path}")
+    print("       verify by rendering: a still grab takes the current clip, not "
+          "the playhead, so it can report the wrong shot entirely")
+
+
+if __name__ == "__main__":
+    main()

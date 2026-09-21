@@ -54,3 +54,36 @@ answer over a whole clip. Correlating picture motion against loudness over a
 wide search is the mistake it is warning about -- on legato singing it peaked
 2.6 s from the truth with r = 0.09, while the same tool given a 6 s window
 landed 0.24 s away with r = 0.21.
+
+## Putting a timing curve into Resolve
+
+Resolve's scripting API exposes `RetimeProcess` -- which interpolation a retime
+uses -- and nothing that sets a speed or a retime keyframe. The way in is a
+Fusion composition: `TimelineItem.ImportFusionComp(path)` takes a `.comp` as
+text, so a curve with a keyframe per frame can be written and pushed.
+
+    MediaIn1 -> TimeStretcher1 -> MediaOut1
+
+with `TimeStretcher1.SourceTime` driven by a `BezierSpline` whose `KeyFrames`
+are `[comp frame] = { source frame, Flags = { Linear = true } }`. `SourceTime`
+counts in the comp's own frames at the TIMELINE rate, and comp frame 0 is the
+clip's first frame, so the value wanted at frame k is
+`donor_real_seconds * fps - GetLeftOffset()`.
+
+Why bother, when ffmpeg can render a retimed file: the clip on the timeline
+stays the camera's own media, so the grade runs on the original instead of on
+an H.264 intermediate, and the curve is visible in the Fusion page. Rendering
+cost nothing measurable -- 212 s of timeline took 19 s with the comp against 25
+s without.
+
+The one thing it cannot do is address a frame the timeline rate cannot reach:
+50 fps S&Q footage conformed to a 25 fps timeline rounds `SourceTime` to 20 ms,
+where `lipsync-clip --frame-exact` picks captured frames at 10 ms. Both are
+well inside a 25 fps frame, and the two routes were checked against each other
+on four sung entries -- same frame in each.
+
+**Get the comp's shape by exporting one, never by guessing it:** add a comp with
+`AddFusionComp()`, `ExportFusionComp(path, 1)`, and edit what comes out.
+**Verify by rendering**, not with a still grab: `GrabStill` takes the current
+clip rather than the playhead, so it will happily report a different shot
+entirely -- here it returned the keys while the question was about the closeup.
