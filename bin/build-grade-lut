@@ -79,10 +79,17 @@ def monotone_curve(points):
     return curve
 
 
-def transform(rgb, wb, curve, sat):
-    """rgb in 0-1, in the order white balance -> curve -> saturation."""
+def transform(rgb, wb, curve, sat, shadow=None, highlight=None):
+    """rgb in 0-1: white balance -> curve -> split tint -> saturation."""
     out = np.clip(rgb * wb, 0, 1)
     out = np.clip(curve(out * 255.0) / 255.0, 0, 1)
+    if shadow is not None or highlight is not None:
+        lo = np.ones(3) if shadow is None else shadow
+        hi = np.ones(3) if highlight is None else highlight
+        # A gain blended geometrically by luma, so it stays a gain at every
+        # level: neutral where both tints are 1, and continuous in between.
+        y = (out @ LUMA)[..., None]
+        out = np.clip(out * lo ** (1.0 - y) * hi ** y, 0, 1)
     if sat != 1.0:
         y = out @ LUMA
         out = np.clip(y[..., None] + (out - y[..., None]) * sat, 0, 1)
@@ -96,6 +103,9 @@ def main():
                     help="control point on 0-255, repeatable")
     ap.add_argument("--wb", default="1,1,1", help="per-channel gain R,G,B applied first")
     ap.add_argument("--sat", type=float, default=1.0, help="saturation about luma, applied last")
+    ap.add_argument("--shadow-tint", help="per-channel gain R,G,B for the dark end, "
+                                          "blended into the light end by luma")
+    ap.add_argument("--highlight-tint", help="per-channel gain R,G,B for the light end")
     ap.add_argument("--size", type=int, default=33, choices=(17, 33, 65))
     ap.add_argument("--title", default="grade")
     ap.add_argument("--comment", action="append", default=[],
@@ -115,6 +125,16 @@ def main():
     wb = np.array([float(v) for v in args.wb.split(",")])
     if len(wb) != 3:
         sys.exit("build-grade-lut: --wb wants three numbers")
+    def triple(text, what):
+        if text is None:
+            return None
+        v = np.array([float(x) for x in text.split(",")])
+        if len(v) != 3:
+            sys.exit(f"build-grade-lut: --{what} wants three numbers")
+        return v
+
+    shadow = triple(args.shadow_tint, "shadow-tint")
+    highlight = triple(args.highlight_tint, "highlight-tint")
     curve = monotone_curve(points)
 
     size = args.size
@@ -122,12 +142,18 @@ def main():
     grid = np.stack(np.meshgrid(axis, axis, axis, indexing="ij"), -1)  # [b][g][r]
     # .cube rows vary red fastest, so index as [b, g, r] and read channels back in order
     rgb = grid[..., ::-1].reshape(-1, 3)
-    out = transform(rgb, wb, curve, args.sat)
+    out = transform(rgb, wb, curve, args.sat, shadow, highlight)
 
     with open(args.out, "w") as fh:
         for line in args.comment:
             fh.write(f"# {line}\n")
-        fh.write(f"# built by: build-grade-lut --wb {args.wb} --sat {args.sat} "
+        # The arguments ARE the grade, so the whole command goes in the file:
+        # a .cube is usually gitignored and this is the only copy of the recipe.
+        tints = "".join(
+            f" --{name} {value}" for name, value in
+            (("shadow-tint", args.shadow_tint), ("highlight-tint", args.highlight_tint))
+            if value)
+        fh.write(f"# built by: build-grade-lut --wb {args.wb} --sat {args.sat}{tints} "
                  + " ".join(f"--point {int(a)}:{int(b)}" for a, b in points) + "\n")
         fh.write(f'TITLE "{args.title}"\n')
         fh.write(f"LUT_3D_SIZE {size}\n\n")
@@ -136,7 +162,7 @@ def main():
 
     levels = np.array([2, 4, 8, 16, 24, 32, 48, 64, 80, 96, 112, 128, 160, 192, 224, 255], float)
     neutral = np.repeat(levels[:, None] / 255.0, 3, axis=1)
-    mapped = transform(neutral, wb, curve, args.sat)[:, 1] * 255.0
+    mapped = transform(neutral, wb, curve, args.sat, shadow, highlight)[:, 1] * 255.0
     slope = np.gradient(mapped, levels)
     print(f"wrote {args.out}  ({size}^3)")
     print("\nneutral axis, and the slope that is also the noise gain at that level:")
@@ -148,7 +174,7 @@ def main():
     for spec in args.probe:
         colour, _, label = spec.partition(":")
         c = np.array([float(v) for v in colour.split(",")]) / 255.0
-        o = transform(c[None, :], wb, curve, args.sat)[0] * 255.0
+        o = transform(c[None, :], wb, curve, args.sat, shadow, highlight)[0] * 255.0
         before = c * 255.0
         print(f"\n{label or 'probe'}: {before[0]:.0f},{before[1]:.0f},{before[2]:.0f}"
               f"  ->  {o[0]:.1f},{o[1]:.1f},{o[2]:.1f}")
