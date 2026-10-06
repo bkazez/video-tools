@@ -74,6 +74,12 @@ sync is still in doubt is handed over: it sits on its own track, the track below
 carries a shot that covers the same seconds, and moving it is a drag rather than
 a rebuild. Clips laid end to end advance their own track's position, not a
 shared one.
+
+`settings` on a timeline gives it its own resolution or rate -- a vertical cut
+beside a horizontal one in the same project:
+
+      - name: "Aria (vertical)"
+        settings: {timelineResolutionWidth: "1080", timelineResolutionHeight: "1920"}
 """
 import argparse, glob, os, sys
 import yaml
@@ -179,6 +185,11 @@ def main():
     resolve = connect()
     pm = resolve.GetProjectManager()
     name = spec["project"]
+    open_now = pm.GetCurrentProject()
+    if open_now and open_now.GetName() != name:
+        # Switching closes whatever is open in the GUI, unsaved work and all.
+        pm.SaveProject()
+        print(f"saved {open_now.GetName()!r} before switching away from it")
     project = pm.CreateProject(name) or pm.LoadProject(name)
     if not project:
         sys.exit(f"could not create or open project {name!r}")
@@ -247,6 +258,12 @@ def main():
             print(f"\n!! could not create timeline {t['name']!r}")
             continue
         project.SetCurrentTimeline(tl)
+        own = t.get("settings") or {}
+        if own:
+            tl.SetSetting("useCustomSettings", "1")
+        for k, v in own.items():
+            if not tl.SetSetting(k, str(v)) or tl.GetSetting(k) != str(v):
+                print(f"  !! timeline setting {k} = {v} REFUSED (reads {tl.GetSetting(k)!r})")
         start_frame = int(tl.GetStartFrame())
         print(f"\ntimeline {t['name']!r} at {fps:g} fps, starts at frame {start_frame}")
 
