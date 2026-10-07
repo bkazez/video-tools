@@ -148,7 +148,13 @@ def main():
     if not codec.startswith("pcm_") and not a.allow_lossy:
         sys.exit(f"{path} came out as {codec}, not PCM. Resolve accepted the "
                  f"setting and wrote something else; do not deliver this file.")
-    print(f"  video  {video[0]['codec_name']} {video[0]['width']}x{video[0]['height']}")
+    v = video[0]
+    if v.get("color_transfer", "unknown") == "unknown":
+        sys.exit(f"{path} carries no transfer tag, so every player guesses its "
+                 f"gamma; set the output colour space to one with a standard tag "
+                 f"(Rec.709 (Scene), Rec.2100 HLG, Rec.2100 ST2084)")
+    print(f"  video  {v['codec_name']} {v.get('pix_fmt')} {v['width']}x{v['height']}  "
+          f"{v.get('color_primaries')}/{v.get('color_transfer')}/{v.get('color_space')}")
     print(f"  audio  {codec} {audio[0].get('sample_rate')} Hz "
           f"{audio[0].get('channels')} ch"
           + ("   *** LOSSY, by --allow-lossy ***" if not codec.startswith("pcm_") else ""))

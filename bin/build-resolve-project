@@ -260,7 +260,14 @@ def main():
         project.SetCurrentTimeline(tl)
         own = t.get("settings") or {}
         if own:
+            # Custom settings start from Resolve's defaults, not the project's:
+            # a vertical timeline silently fell back to Rec.709 (Scene) while
+            # the project was HLG, so the project's settings go on first.
+            # Some project settings (input colour space, the frame rate) have no
+            # timeline counterpart and are refused here, harmlessly.
             tl.SetSetting("useCustomSettings", "1")
+            for k, v in (spec.get("settings") or {}).items():
+                tl.SetSetting(k, str(v))
         for k, v in own.items():
             if not tl.SetSetting(k, str(v)) or tl.GetSetting(k) != str(v):
                 print(f"  !! timeline setting {k} = {v} REFUSED (reads {tl.GetSetting(k)!r})")
