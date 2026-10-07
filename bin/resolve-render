@@ -100,6 +100,9 @@ def main():
     if not t:
         sys.exit(f"no timeline called {a.timeline!r} in project {p.GetName()!r}")
     p.SetCurrentTimeline(t)
+    # Resolve resolves a relative TargetDir against nothing and stops on a modal
+    # "Render Path Inaccessible" that no API call can dismiss.
+    a.out = os.path.abspath(os.path.expanduser(a.out))
     os.makedirs(a.out, exist_ok=True)
 
     if not p.LoadRenderPreset(a.preset):
