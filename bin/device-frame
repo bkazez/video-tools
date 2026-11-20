@@ -5,8 +5,11 @@
 # to be wrong about it. The still pipeline (frame-shot) and the film pipeline
 # (product-video) both ask this.
 #
-# The PNGs are fastlane's frameit frames, which are the ones Apple's own marketing
-# uses. Cached on first ask under ~/.cache/device-frames.
+# The PNGs are fastlane's frameit frames, or Apple's own Product Bezels (an
+# "apple:DMG:PATH" source) for devices frameit lacks. Apple's disk images open
+# with a license limiting the bezels to mock-ups of software on Apple's
+# platforms, which Ben accepted on 2026-11-20. Cached on first ask under
+# ~/.cache/device-frames.
 #
 #   device-frame                      # the default device's PNG path
 #   device-frame iphone-16-pro-max    # that device's PNG path
@@ -24,9 +27,13 @@ DEFAULT_DEVICE=iphone-16-pro-max
 # rectangle and a real screen is not, so its corners have to be rounded to the
 # screen's radius or they poke past the titanium into the frame's cutout.
 DEVICES="\
-iphone-16-pro-max|iphone16promax.png|Apple%20iPhone%2016%20Pro%20Max%20Natural%20Titanium.png|75|66|1320|2868|120"
+iphone-16-pro-max|iphone16promax.png|Apple%20iPhone%2016%20Pro%20Max%20Natural%20Titanium.png|75|66|1320|2868|120
+ipad-pro-13|ipad-pro-13-m5-portrait.png|apple:Bezel-iPad-Pro-(M5).dmg:PNG/iPad Pro (M5) 13\" - Space Black - Portrait.png|118|124|2064|2752|58
+iphone-duo-inner|iphone-duo-inner-open-portrait.png|apple:Bezel-iPhone-Duo.dmg:PNG/iPhone Duo - Night Sky - Inner Open Portrait.png|120|120|2007|2853|0
+iphone-duo-outer|iphone-duo-outer-closed-portrait.png|apple:Bezel-iPhone-Duo.dmg:PNG/iPhone Duo - Night Sky - Outer Closed Portrait.png|88|80|1398|2034|24"
 
 BASE_URL="https://raw.githubusercontent.com/fastlane/frameit-frames/gh-pages/latest"
+APPLE_URL="https://devimages-cdn.apple.com/design/resources/download"
 
 usage() { sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; }
 
@@ -55,7 +62,17 @@ if [ ! -s "$PNG" ]; then
     mkdir -p "$CACHE"
     # To a temporary name first: a half-downloaded PNG left at the cache path is
     # a cache that never repairs itself.
-    curl -fsSL -o "$PNG.part" "$BASE_URL/$URL_PATH"
+    case "$URL_PATH" in
+        apple:*)
+            DMG="${URL_PATH#apple:}"; INSIDE="${DMG#*:}"; DMG="${DMG%%:*}"
+            TMP="$(mktemp -d)"
+            curl -fsSL -o "$TMP/bezel.dmg" "$APPLE_URL/$DMG"
+            VOLUME="$(hdiutil attach -nobrowse -readonly "$TMP/bezel.dmg" < <(yes) | grep -o '/Volumes/.*' | tail -1)"
+            cp "$VOLUME/$INSIDE" "$PNG.part"
+            hdiutil detach -quiet "$VOLUME"
+            rm -rf "$TMP" ;;
+        *) curl -fsSL -o "$PNG.part" "$BASE_URL/$URL_PATH" ;;
+    esac
     mv "$PNG.part" "$PNG"
 fi
 
