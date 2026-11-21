@@ -1,0 +1,210 @@
+#!/usr/bin/env python3
+"""A screen recording as an even video: every frame the screen drew, once, at a
+steady rate, with the frames it failed to draw built in between.
+
+A simulator's screen recording keeps a frame each time the
+screen changed, at the time it changed, plus a copy of most of them a moment
+later. Where the simulator is busy it draws a third as often, and where it
+hitches it holds one picture and then catches up. Resampling that to a fixed rate
+(`fps=50`) keeps every stall and adds a judder of its own: a step of one drawn
+frame, then two. `motion-smoothness` fails all of it.
+
+This keeps each picture the screen drew once, in order, and gives it as many
+frames at --fps as the picture moved: one where it drew at the display's rate,
+three where it drew a third as often. The frames it did not draw are built from
+the two drawn either side (lib/motion.py fits the motion between them), moving
+only what moved: a pixel goes with the motion only where that explains the next
+picture better than standing still does, so a plane the camera follows, its
+shadow and its route line stay put, and outside the moving region (a card, a
+status bar) the frames crossfade.
+
+    retime-recording recording.mp4 even.mp4
+    retime-recording recording.mp4 even.mp4 --from 32.5 --seconds 42 --fps 60
+
+Lossless out (x264 -qp 0), for whatever cuts it next.
+"""
+import argparse, json, os, subprocess, sys
+
+import numpy as np
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "lib"))
+import motion  # noqa: E402
+
+SAME = 0.2      # a frame within this mean grey level of the last drawn one is a copy of it
+HELD = 0.1      # or whose moving part moved less than this many analysis pixels
+AROUND = 1.0    # seconds either side whose drawn frames say how fast the picture is moving
+
+
+def plan(path, width, height, fps, cut):
+    """Which frames of the recording are drawn ones, and how many frames each gets."""
+    spread = motion.spread(path, width, height, **cut)
+    corners = motion.moving_blocks(spread)
+    _, _, times = motion.probe(path)
+    start = cut.get("start") or 0.0
+    drawn, last, last_frame = [], None, None
+    for index, frame in enumerate(motion.frames(path, width, height, **cut)):
+        if last_frame is not None and np.abs(frame - last_frame).mean() < SAME:
+            continue
+        spectra = motion.spectra(frame, corners) if corners else None
+        moved, fit = 0.0, np.zeros(6)
+        if last is not None and corners:
+            moved, _ = motion.step(last, spectra)
+            # A hitch can redraw the card and leave the map where it was; to the eye
+            # that is the last picture again.
+            if moved < HELD:
+                continue
+            fit = motion.affine(last, spectra, corners)
+        drawn.append({"index": index, "moved": moved, "fit": fit})
+        last, last_frame = spectra, frame
+    # The recording's own clock, for how long each drawn frame stayed on screen.
+    first = int(np.searchsorted(times, start - 1e-4))
+    for d in drawn:
+        d["time"] = times[min(first + d["index"], len(times) - 1)]
+    for before, d in zip(drawn, drawn[1:]):
+        d["gap"] = d["time"] - before["time"]
+    drawn[0]["gap"] = 1 / fps
+    moved = np.array([d["moved"] for d in drawn])
+    times = np.array([d["time"] for d in drawn])
+    for d in drawn:
+        # Most frames are drawn on time, so the median step around is one frame's worth.
+        near = moved[(np.abs(times - d["time"]) <= AROUND) & (moved > 0)]
+        speed = float(np.median(near)) if len(near) else 0.0
+        # As many frames as the picture moved, not as the recording's clock says: its
+        # stamps lag the picture through a stall (2.9 frames' worth of ground 20 ms
+        # after the last, then 4.9 in 13 ms). The clock counts only for a still.
+        worth = d["moved"] / speed if speed > HELD else max(1, round(d["gap"] * fps))
+        # Whole frames where it is near enough, so the pictures drawn on time stay as drawn.
+        d["frames"] = round(worth) if round(worth) >= 1 and abs(worth - round(worth)) < 0.2 else worth
+    # Where each drawn picture falls on the output's even clock, in frames. A picture
+    # worth 1.5 frames lands between two, and the frames either side are built.
+    clock = 0.0
+    for d in drawn:
+        clock = d["slot"] = clock + d["frames"] if d is not drawn[0] else 0.0
+    return drawn, spread, corners
+
+
+def regions(corners, shape, width, height):
+    """Where the picture moves as one (the moving blocks), at full size."""
+    moving = np.zeros(shape, bool)
+    for y, x in corners:
+        moving[y:y + motion.BLOCK, x:x + motion.BLOCK] = True
+    rows = (np.arange(height) * shape[0] / height).astype(int)
+    cols = (np.arange(width) * shape[1] / width).astype(int)
+    return moving[rows][:, cols]
+
+
+def sample(plane, x, y):
+    h, w = plane.shape
+    x = np.clip(x, 0, w - 1.001)
+    y = np.clip(y, 0, h - 1.001)
+    x0, y0 = x.astype(int), y.astype(int)
+    fx, fy = x - x0, y - y0
+    p = plane.astype(np.float32)
+    top = p[y0, x0] * (1 - fx) + p[y0, x0 + 1] * fx
+    bottom = p[y0 + 1, x0] * (1 - fx) + p[y0 + 1, x0 + 1] * fx
+    return top * (1 - fy) + bottom * fy
+
+
+def between(a, b, f, fit, moving, scale):
+    """The frame a fraction f of the way from picture a to picture b (Y, U, V planes).
+
+    Inside the moving region each pixel is either carried along the motion or
+    crossfaded where it stands, whichever explains b better: the ground is carried,
+    and a plane, its shadow and the route line under it, which the camera holds
+    nearly still, stay put. Dragging those with the ground is what ghosts them."""
+    rows, cols = np.nonzero(moving.any(axis=1))[0], np.nonzero(moving.any(axis=0))[0]
+    out, carry = [], None
+    for index, (pa, pb) in enumerate(zip(a, b)):
+        sub = 1 if index == 0 else 2
+        plane = pa.astype(np.float32) * (1 - f) + pb.astype(np.float32) * f
+        if len(rows) and len(cols):
+            box = (slice(rows[0] // sub, rows[-1] // sub + 1), slice(cols[0] // sub, cols[-1] // sub + 1))
+            y, x = np.mgrid[box].astype(np.float32)
+            # The fit is in analysis pixels; at this plane's size x and y are `scale / sub` bigger.
+            k = scale / sub
+            dx = k * fit[0] + fit[1] * x + fit[2] * y
+            dy = k * fit[3] + fit[4] * x + fit[5] * y
+            warped = (1 - f) * sample(pa, x - f * dx, y - f * dy) + f * sample(pb, x + (1 - f) * dx, y + (1 - f) * dy)
+            if carry is None:
+                # Judged on the light alone and shared with the colour, so they cannot disagree.
+                carried = np.abs(sample(pa, x - dx, y - dy) - pb[box])
+                stood = np.abs(pa[box].astype(np.float32) - pb[box])
+                carry = (carried <= stood) & moving[box]
+            here = carry if sub == 1 else carry[::2, ::2][:warped.shape[0], :warped.shape[1]]
+            region = plane[box]
+            region[here] = warped[here]
+        out.append(np.clip(plane + 0.5, 0, 255).astype(np.uint8))
+    return out
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    parser.add_argument("recording")
+    parser.add_argument("out")
+    parser.add_argument("--fps", type=float, default=60)
+    parser.add_argument("--from", dest="start", type=float)
+    parser.add_argument("--seconds", type=float)
+    args = parser.parse_args()
+    cut = {"start": args.start, "seconds": args.seconds}
+
+    width, height, _ = motion.probe(args.recording)
+    drawn, spread, corners = plan(args.recording, width, height, args.fps, cut)
+    moving = regions(corners, spread.shape, width, height)
+    scale = width / motion.WIDTH
+    built = int(drawn[-1]["slot"]) + 1 - len(drawn)
+    print(f"retime-recording: {len(drawn)} drawn frames, {built} built between them, "
+          f"{len(drawn) + built} at {args.fps:g} fps", file=sys.stderr)
+
+    tags = json.loads(subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+         "stream=color_range,color_space,color_transfer,color_primaries", "-of", "json", args.recording],
+        capture_output=True, check=True).stdout)["streams"][0]
+    colour = [flag for key, option in [("color_range", "-color_range"), ("color_space", "-colorspace"),
+                                       ("color_transfer", "-color_trc"), ("color_primaries", "-color_primaries")]
+              if tags.get(key) and tags[key] != "unknown" for flag in (option, tags[key])]
+    writer = subprocess.Popen(
+        ["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "yuv420p", "-s", f"{width}x{height}",
+         "-framerate", f"{args.fps:g}", *colour, "-i", "-", "-c:v", "libx264", "-qp", "0", "-preset", "ultrafast",
+         "-pix_fmt", "yuv420p", *colour, args.out], stdin=subprocess.PIPE)
+    reader = subprocess.Popen(
+        ["ffmpeg", "-v", "error", *(["-ss", f"{args.start}"] if args.start is not None else []), "-i", args.recording,
+         *(["-t", f"{args.seconds}"] if args.seconds is not None else []),
+         "-fps_mode", "passthrough", "-enc_time_base", "demux", "-f", "rawvideo", "-pix_fmt", "yuv420p", "-"],
+        stdout=subprocess.PIPE)
+    luma, chroma = width * height, (width // 2) * (height // 2)
+    wanted = iter(drawn)
+    target = next(wanted)
+    last = None
+    for index in range(drawn[-1]["index"] + 1):
+        raw = reader.stdout.read(luma + 2 * chroma)
+        if len(raw) < luma + 2 * chroma:
+            break
+        if index != target["index"]:
+            continue
+        data = np.frombuffer(raw, np.uint8)
+        planes = [data[:luma].reshape(height, width),
+                  data[luma:luma + chroma].reshape(height // 2, width // 2),
+                  data[luma + chroma:].reshape(height // 2, width // 2)]
+        if last is None:
+            writer.stdin.write(raw)
+        else:
+            for k in range(int(np.floor(slot)) + 1, int(np.floor(target["slot"])) + 1):
+                f = (k - slot) / (target["slot"] - slot)
+                if f > 0.98:
+                    writer.stdin.write(raw)
+                else:
+                    for plane in between(last, planes, f, target["fit"], moving, scale):
+                        writer.stdin.write(plane.tobytes())
+        last, slot = planes, target["slot"]
+        target = next(wanted, None)
+        if target is None:
+            break
+    reader.kill()
+    reader.wait()
+    writer.stdin.close()
+    if writer.wait():
+        sys.exit("retime-recording: the encoder failed")
+
+
+if __name__ == "__main__":
+    main()

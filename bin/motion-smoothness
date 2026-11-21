@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+"""Whether a video's motion is smooth: no freezes, no jumps, an even cadence.
+
+A screen recording of a simulator stalls: it holds one picture for a few frames
+and then jumps to where the motion should have been. Resampling a recording to a
+frame rate it was not drawn at does the same on a small scale, a step of one
+source frame and then two. Both read as jerky, and neither is easy to see in one
+viewing on a laptop. This measures it.
+
+For each frame it finds how far the moving part of the picture went since the
+frame before (lib/motion.py: phase correlation block by block, over the blocks
+that change during the video). Each step is compared with the median of the
+steps on either side of it (a twentieth of a second each way), which a camera
+easing in or out follows and a stall does not:
+
+  freeze   a step under FREEZE x its neighbours', between moving frames
+  jump     a step over JUMP x its neighbours'
+  cadence  the steps' spread, median |step / neighbours' - 1|, over CADENCE
+
+A picture that is not moving, or barely, is not judged: a still is not a stall.
+Nor is a cut, where nothing in one frame has a counterpart in the next. Exit 1
+on any fault, with the worst frames and their times.
+
+    motion-smoothness film.mp4
+    motion-smoothness --loop loop.mp4          # the last frame into the first, too
+    motion-smoothness --json film.mp4          # every step, for a plot
+"""
+import argparse, json, os, sys
+
+import numpy as np
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "lib"))
+import motion  # noqa: E402
+
+FREEZE = 0.4
+JUMP = 1.6
+CADENCE = 0.1
+NEAR = 0.05              # seconds either side that are a step's neighbours
+STILL = 0.1              # a local median under this many analysis pixels a frame is a still
+
+
+def measure(path, loop):
+    width, height, times = motion.probe(path)
+    # What a player shows: a frame on screen for under half a frame's time (a recording's
+    # copy of the picture 2 ms after it) is not seen, so its successor stands for it.
+    shown = np.diff(times, append=times[-1] + np.median(np.diff(times))) if len(times) > 1 else np.ones(len(times))
+    typical = np.median(shown[shown > 0]) if (shown > 0).any() else 1 / 30
+    seen = shown >= typical / 2
+    times = times[seen]
+    corners = motion.moving_blocks(motion.spread(path, width, height))
+    count = max(len(times) - 1 + loop, 0)
+    fps = 1 / typical
+    if not corners:
+        return np.zeros(count), np.ones(count, bool), times, fps
+    steps, same, first, before = [], [], None, None
+    for frame, keep in zip(motion.frames(path, width, height), seen):
+        if not keep:
+            continue
+        frame = motion.spectra(frame, corners)
+        if before is None:
+            first = frame
+        else:
+            moved, kept = motion.step(before, frame)
+            steps.append(moved)
+            same.append(kept)
+        before = frame
+    if loop:
+        moved, kept = motion.step(before, first)
+        steps.append(moved)
+        same.append(kept)
+    steps, same = np.array(steps), np.array(same)
+    gaps = np.diff(times)[:len(steps)]
+    if len(gaps) == len(steps) and len(gaps) and np.ptp(gaps) > 1e-3:
+        # A recording's frames are not evenly spaced; judge speed, not step.
+        steps = steps * typical / np.maximum(gaps, 1e-4)
+    return steps, same, times, fps
+
+
+def judge(steps, same, fps):
+    reach = max(2, int(round(NEAR * fps)))
+    local = np.zeros(len(steps))
+    for i in range(len(steps)):
+        around = np.r_[max(0, i - reach):i, i + 1:min(len(steps), i + reach + 1)]
+        around = around[same[around]]
+        if len(around):
+            local[i] = np.median(steps[around])
+    judged = same & (local > STILL)
+    ratio = np.where(judged, steps / np.maximum(local, 1e-6), 1.0)
+    faults = [("freeze", i) for i in np.flatnonzero(judged & (ratio < FREEZE))] + \
+             [("jump", i) for i in np.flatnonzero(judged & (ratio > JUMP))]
+    spread = float(np.median(np.abs(ratio[judged] - 1))) if judged.any() else 0.0
+    return local, ratio, judged, faults, spread
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    parser.add_argument("video")
+    parser.add_argument("--loop", action="store_true", help="also judge the last frame into the first")
+    parser.add_argument("--json", action="store_true", help="print every step")
+    parser.add_argument("--worst", type=int, default=8, help="how many faults to print")
+    args = parser.parse_args()
+
+    steps, same, times, fps = measure(args.video, args.loop)
+    local, ratio, judged, faults, spread = judge(steps, same, fps)
+    freezes = sum(1 for kind, _ in faults if kind == "freeze")
+    jumps = len(faults) - freezes
+    cuts = int((~same).sum())
+    if args.json:
+        print(json.dumps({"fps": fps, "steps": steps.round(3).tolist(), "ratio": ratio.round(3).tolist(),
+                          "judged": judged.tolist(), "spread": spread, "freezes": freezes, "jumps": jumps}))
+    summary = (f"{args.video}: {len(steps)} steps, {int(judged.sum())} moving, {cuts} cuts; median step "
+               f"{np.median(steps[judged]) if judged.any() else 0:.2f} px; spread {spread:.3f} "
+               f"(limit {CADENCE}); {freezes} freezes, {jumps} jumps")
+    worst = sorted(faults, key=lambda f: -abs(np.log(max(ratio[f[1]], 1e-3))))[:args.worst]
+    for kind, i in sorted(worst, key=lambda f: f[1]):
+        when = times[i + 1] if i + 1 < len(times) else len(steps) / fps
+        print(f"  {kind} into frame {i + 1} ({when:.2f} s): step {steps[i]:.2f} px, "
+              f"{ratio[i]:.2f}x the {local[i]:.2f} px around it", file=sys.stderr)
+    if faults or spread > CADENCE:
+        print("motion-smoothness: JERKY " + summary, file=sys.stderr)
+        sys.exit(1)
+    print("motion-smoothness: smooth " + summary, file=sys.stderr if args.json else sys.stdout)
+
+
+if __name__ == "__main__":
+    main()

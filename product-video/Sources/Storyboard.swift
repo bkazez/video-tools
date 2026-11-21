@@ -4,7 +4,7 @@
 // skills/product-video/reference/storyboard.md; the only parts here are the ones
 // a compositor needs -- the words, their moments, and the beat they land on.
 
-import Foundation
+import AppKit
 
 struct Storyboard {
     let seconds: Double
@@ -12,6 +12,12 @@ struct Storyboard {
     let beat: Double?
     let subdivide: Double
     let events: [[String: Any]]
+    /// How much of the canvas's height a device's bezel stands in. Room for titles
+    /// above and below it by default; a film with no words can give the phone
+    /// nearly all of it.
+    let deviceFill: CGFloat
+    /// What the canvas is behind the product where there is no room footage.
+    let background: NSColor?
     private let board: [String: Any]
 
     init(path: String) {
@@ -24,9 +30,17 @@ struct Storyboard {
         fps = Storyboard.number(board["fps"]) ?? 30
         beat = Storyboard.number(board["beat"])
         subdivide = max(Storyboard.number(board["subdivide"]) ?? 1, 1)
-        events = (board["events"] as? [[String: Any]] ?? [])
-            .sorted { (Storyboard.number($0["at"]) ?? 0) < (Storyboard.number($1["at"]) ?? 0) }
-        guard !events.isEmpty else { fail("the storyboard has no events") }
+        // An empty list is a film with no words; no list at all is a typo.
+        guard let listed = board["events"] as? [[String: Any]] else { fail("the storyboard has no events") }
+        events = listed.sorted { (Storyboard.number($0["at"]) ?? 0) < (Storyboard.number($1["at"]) ?? 0) }
+        deviceFill = CGFloat(Storyboard.number(board["device_fill"]) ?? 0.72)
+        background = (board["background"] as? String).map { hex in
+            guard hex.hasPrefix("#"), hex.count == 7, let rgb = Int(hex.dropFirst(), radix: 16) else {
+                fail("background is \(hex); it wants #RRGGBB")
+            }
+            return NSColor(srgbRed: CGFloat(rgb >> 16 & 255) / 255, green: CGFloat(rgb >> 8 & 255) / 255,
+                           blue: CGFloat(rgb & 255) / 255, alpha: 1)
+        }
     }
 
     static func number(_ raw: Any?) -> Double? { (raw as? NSNumber)?.doubleValue }

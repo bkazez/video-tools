@@ -75,14 +75,6 @@ enum Film {
         var size: NSSize { bezel.size }
     }
 
-    /// How much of the canvas's height the bezel stands in.
-    ///
-    /// High enough that the phone is the subject, low enough that a band of room
-    /// is left above and below it -- because a device's whole screen is usually
-    /// words, and a title centred over the middle of the frame would land on top
-    /// of them. The room is where the film's own words go.
-    static let deviceFill: CGFloat = 0.72
-
     static func device(_ name: String) -> Device {
         guard let home = ProcessInfo.processInfo.environment["PRODUCT_VIDEO_HOME"] else {
             fail("PRODUCT_VIDEO_HOME is unset; run this through bin/product-video")
@@ -117,8 +109,8 @@ enum Film {
     /// Where the bezel stands in the canvas, and where its glass is -- the rect
     /// the product gets drawn into. Centred, because a phone off to one side
     /// reads as a layout and a phone in the middle reads as the subject.
-    static func stand(_ device: Device, in canvas: NSRect) -> (bezel: NSRect, screen: NSRect) {
-        let scale = canvas.height * deviceFill / device.size.height
+    static func stand(_ device: Device, in canvas: NSRect, fill: CGFloat) -> (bezel: NSRect, screen: NSRect) {
+        let scale = min(canvas.height * fill / device.size.height, canvas.width * fill / device.size.width)
         let bezel = NSRect(x: canvas.midX - device.size.width * scale / 2,
                            y: canvas.midY - device.size.height * scale / 2,
                            width: device.size.width * scale,

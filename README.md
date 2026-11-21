@@ -77,7 +77,7 @@ landing page. `skills/product-video/reference/storyboard.md` beside it is the
 file format.
 
     bin/product-video storyboard.json --frames DIR --out film.mp4 [--audio a.wav]
-                      [--backdrop DIR]
+                      [--backdrop DIR] [--loop]
     bin/product-video storyboard.json --check
     bin/product-video storyboard.json --layout [--vertical]
 
@@ -107,6 +107,25 @@ source needs that rectangle too and one rule beats two.
 `bin/device-frame` is the one table of where each device's screen sits in its
 bezel. `~/bin/frame-shot`, which frames App Store screenshots, reads the same
 row, so a still and a frame of the film cannot disagree about where the glass is.
+
+### No film leaves jerky
+
+    bin/motion-smoothness film.mp4               # exit 1 on a freeze, a jump or an uneven cadence
+    bin/motion-smoothness --loop loop.mp4        # and the last frame into the first
+    bin/retime-recording recording.mp4 even.mp4 --from 32.5 --seconds 42 --fps 60
+
+`motion-smoothness` measures how far the moving part of the picture goes each
+frame (block phase correlation, `lib/motion.py`) and fails a step far from its
+neighbours'. `product-video` runs it on every film and deletes one that fails.
+FlightTrack's iPad 4:5 Follow Mode cut, which Ben called jerky, fails it (122
+freezes and 124 jumps in 864 frames); so does the iPhone one he called better
+(293 freezes and 215 jumps in 1384: a double step every fifth frame, from 60 Hz
+kept at 50, and every few seconds a stretch the simulator drew at 20 Hz).
+
+`retime-recording` is the fix for a simulator's screen recording: each picture it
+drew once, as many frames at `--fps` as the picture moved, and the frames it did
+not draw built from the two either side, moving only what moved.
+`tests/test_motion_smoothness.py` proves both directions on a synthetic pan.
 
 ## Conforming picture to a mix that changed length
 

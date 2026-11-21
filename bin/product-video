@@ -7,13 +7,15 @@
 # of this house has none: an .xcodeproj is a file nobody can review.
 #
 #   product-video storyboard.json --frames DIR --out film.mp4 [--audio a.wav]
-#                 [--backdrop DIR] [--gain-db X] [--width 1920] [--poster-at 4]
+#                 [--backdrop DIR] [--gain-db X] [--width 1920] [--poster-at 4] [--loop]
 #   product-video storyboard.json --check
 #   product-video storyboard.json --layout [--vertical]
 #
 # What draws the frames is per product and lives with that product; what this
 # does is everything that is film rather than product. The contract is
-# skills/product-video/reference/storyboard.md.
+# skills/product-video/reference/storyboard.md. Every film it writes passes
+# bin/motion-smoothness (with --loop, the last frame into the first as well), or
+# it is not kept.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -21,7 +23,7 @@ SOURCES="$HERE/product-video/Sources"
 BINARY="$HERE/product-video/.build/product-video"
 
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
-    sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'
     exit 0
 fi
 

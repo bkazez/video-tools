@@ -1,7 +1,7 @@
 // product-video -- put a product's frames into a film.
 //
 //     product-video storyboard.json --frames DIR --out film.mp4 [--audio a.wav]
-//                   [--backdrop DIR] [--gain-db X] [--width 1920] [--poster-at 4]
+//                   [--backdrop DIR] [--gain-db X] [--width 1920] [--poster-at 4] [--loop]
 //     product-video storyboard.json --check          the storyboard alone
 //     product-video storyboard.json --layout [--vertical]   where the device goes
 //
@@ -65,7 +65,7 @@ func layout(canvas: CGSize?, product: CGSize, chrome: String?)
         return (frame, box, nil)
     }
     let device = Film.device(chrome)
-    let stood = Film.stand(device, in: frame)
+    let stood = Film.stand(device, in: frame, fill: storyboard.deviceFill)
     return (frame, stood.screen, (device, stood.bezel))
 }
 
@@ -221,6 +221,10 @@ for index in 0..<timeline.frames {
     // The room first, under a WEAKER camera than the product gets, so moving closer separates
     // the two the way a lens does. Drawn and restored on its own so the product's transform is
     // not built on top of it.
+    if let colour = storyboard.background {
+        colour.setFill()
+        canvas.fill()
+    }
     if let room {
         if let lens, let focus = focusInCanvas, lens.scale > 1.0001 {
             let near = 1 + (lens.scale - 1) * roomParallax
@@ -304,6 +308,18 @@ if text("--audio") != nil {
 }
 encode += ["-movflags", "+faststart", out]
 run("ffmpeg", encode)
+
+// No film leaves here jerky: a stall, a catch-up or an uneven cadence fails it, and
+// the file goes with it, so nobody posts the one that failed.
+let smooth = Process()
+smooth.executableURL = URL(fileURLWithPath: "\(ProcessInfo.processInfo.environment["PRODUCT_VIDEO_HOME"] ?? ".")/bin/motion-smoothness")
+smooth.arguments = [out] + (arguments.contains("--loop") ? ["--loop"] : [])
+try? smooth.run()
+smooth.waitUntilExit()
+if smooth.terminationStatus != 0 {
+    try? FileManager.default.removeItem(atPath: out)
+    fail("\(out) is jerky (motion-smoothness, above), so it was not kept")
+}
 
 let poster = (out as NSString).deletingPathExtension + "-poster.jpg"
 // Inside the film: a poster asked for at the fourth second of a two second film
