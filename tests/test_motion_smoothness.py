@@ -81,6 +81,14 @@ def main():
         write(stall, positions)
         code, said = judge(stall)
         check("a stall and a catch-up are jerky", code == 1 and "freeze" in said and "jump" in said, said)
+        shots = tmp / "shots"
+        done = subprocess.run([sys.executable, str(CHECK), "--frames", str(shots), str(stall)], capture_output=True, text=True)
+        printed = [line for line in done.stderr.splitlines() if " into frame " in line]
+        pictures = sorted(shots.glob("*.png"))
+        check("--frames keeps a picture of each fault it prints",
+              len(printed) >= 2 and len(pictures) == len(printed), f"{len(printed)} faults, {len(pictures)} pictures")
+        subprocess.run([sys.executable, str(CHECK), "--frames", str(tmp / "none"), str(even)], capture_output=True)
+        check("and none of a smooth film", not list((tmp / "none").glob("*.png")))
 
         # Drawn at 60, kept at 50: a step of one drawn frame, then every fifth a step of two.
         judder = tmp / "judder.mp4"

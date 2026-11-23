@@ -24,8 +24,11 @@ on any fault, with the worst frames and their times.
     motion-smoothness film.mp4
     motion-smoothness --loop loop.mp4          # the last frame into the first, too
     motion-smoothness --json film.mp4          # every step, for a plot
+    motion-smoothness --frames out/ film.mp4   # each fault printed, as a picture: the frame
+                                               # before it beside the frame after, so one look
+                                               # says what jumped, with no frame-by-frame viewing
 """
-import argparse, json, os, sys
+import argparse, json, os, subprocess, sys
 
 import numpy as np
 
@@ -92,12 +95,20 @@ def judge(steps, same, fps):
     return local, ratio, judged, faults, spread
 
 
+def picture(video, before, after, out):
+    """The frame shown at BEFORE beside the one shown at AFTER, half size, in OUT."""
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", f"{before:.4f}", "-i", video, "-ss", f"{after:.4f}", "-i", video,
+                    "-filter_complex", "[0:v]scale=iw/2:-2[a];[1:v]scale=iw/2:-2[b];[a][b]hstack",
+                    "-frames:v", "1", out], check=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("video")
     parser.add_argument("--loop", action="store_true", help="also judge the last frame into the first")
     parser.add_argument("--json", action="store_true", help="print every step")
     parser.add_argument("--worst", type=int, default=8, help="how many faults to print")
+    parser.add_argument("--frames", metavar="DIR", help="save each printed fault's frames before and after it here")
     args = parser.parse_args()
 
     steps, same, times, fps = measure(args.video, args.loop)
@@ -112,10 +123,16 @@ def main():
                f"{np.median(steps[judged]) if judged.any() else 0:.2f} px; spread {spread:.3f} "
                f"(limit {CADENCE}); {freezes} freezes, {jumps} jumps")
     worst = sorted(faults, key=lambda f: -abs(np.log(max(ratio[f[1]], 1e-3))))[:args.worst]
+    if args.frames:
+        os.makedirs(args.frames, exist_ok=True)
     for kind, i in sorted(worst, key=lambda f: f[1]):
         when = times[i + 1] if i + 1 < len(times) else len(steps) / fps
         print(f"  {kind} into frame {i + 1} ({when:.2f} s): step {steps[i]:.2f} px, "
               f"{ratio[i]:.2f}x the {local[i]:.2f} px around it", file=sys.stderr)
+        if args.frames and i + 1 < len(times):
+            out = os.path.join(args.frames, f"{when:07.2f}s-{kind}.png")
+            picture(args.video, times[i], times[i + 1], out)
+            print(f"    {out}", file=sys.stderr)
     if faults or spread > CADENCE:
         print("motion-smoothness: JERKY " + summary, file=sys.stderr)
         sys.exit(1)

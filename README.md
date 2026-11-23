@@ -112,6 +112,7 @@ row, so a still and a frame of the film cannot disagree about where the glass is
 
     bin/motion-smoothness film.mp4               # exit 1 on a freeze, a jump or an uneven cadence
     bin/motion-smoothness --loop loop.mp4        # and the last frame into the first
+    bin/motion-smoothness --frames out/ rec.mp4  # each fault as one PNG: the frame before beside the frame after
     bin/retime-recording recording.mp4 even.mp4 --from 32.5 --seconds 42 --fps 60
 
 `motion-smoothness` measures how far the moving part of the picture goes each
