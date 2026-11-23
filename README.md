@@ -121,11 +121,16 @@ neighbours'. `product-video` runs it on every film and deletes one that fails.
 FlightTrack's iPad 4:5 Follow Mode cut, which Ben called jerky, fails it (122
 freezes and 124 jumps in 864 frames); so does the iPhone one he called better
 (293 freezes and 215 jumps in 1384: a double step every fifth frame, from 60 Hz
-kept at 50, and every few seconds a stretch the simulator drew at 20 Hz).
+kept at 50, and every few seconds a stretch the app drew at 20 Hz).
 
-`retime-recording` is the fix for a simulator's screen recording: each picture it
-drew once, as many frames at `--fps` as the picture moved, and the frames it did
-not draw built from the two either side, moving only what moved.
+A freeze or a jump in a recording of an app is the app's fault, never the
+recorder's: fix the app, and measure the same motion on an iPhone
+(visual-test-tools `bin/hitches`) before calling it smooth.
+
+`retime-recording` makes a film from a recording: each picture drawn once, as
+many frames at `--fps` as the picture moved, and the frames between built from
+the two either side, moving only what moved. It hides stalls, so it never
+judges an app.
 `tests/test_motion_smoothness.py` proves both directions on a synthetic pan.
 
 ## Conforming picture to a mix that changed length

@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Whether a video's motion is smooth: no freezes, no jumps, an even cadence.
 
-A screen recording of a simulator stalls: it holds one picture for a few frames
-and then jumps to where the motion should have been. Resampling a recording to a
-frame rate it was not drawn at does the same on a small scale, a step of one
-source frame and then two. Both read as jerky, and neither is easy to see in one
-viewing on a laptop. This measures it.
+A freeze and then a jump in a recording of an app is the app failing to draw on
+time. It is the app's fault until the same motion, recorded on an iPhone, is
+measured smooth (visual-test-tools bin/hitches); a slow simulator only shows
+sooner what a phone will show later. Resampling a recording to a frame rate it
+was not drawn at adds a judder of its own, a step of one source frame and then
+two. Both read as jerky, and neither is easy to see in one viewing on a laptop.
+This measures it.
 
 For each frame it finds how far the moving part of the picture went since the
 frame before (lib/motion.py: phase correlation block by block, over the blocks

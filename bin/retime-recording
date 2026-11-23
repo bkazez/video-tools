@@ -18,6 +18,9 @@ picture better than standing still does, so a plane the camera follows, its
 shadow and its route line stay put, and outside the moving region (a card, a
 status bar) the frames crossfade.
 
+It hides the app's own stalls, so it only makes a film. It never says whether
+an app is smooth: measure that on the raw recording, on an iPhone.
+
     retime-recording recording.mp4 even.mp4
     retime-recording recording.mp4 even.mp4 --from 32.5 --seconds 42 --fps 60
 
