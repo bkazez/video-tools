@@ -108,15 +108,20 @@ def segments(log, seconds):
     A gesture takes the simulator one to three seconds, so the test plays each
     one after the last has landed (Filming's playFilm) and the film drops the
     still moment before each touch: a touch at `touch` in the film is at `cut`
-    in the recording. Nothing inside an action is dropped or sped up."""
-    marks = [(0.0, 0.0)] + [(g["touch"], g["cut"]) for g in log.get("gestures", [])] + [(seconds, None)]
+    in the recording. Nothing inside an action is dropped.
+
+    A gesture with `"slow": N` had the app play the stretch after it N times
+    slower, so a loaded simulator drew every frame of it; that stretch is N
+    times as long in the recording and is played back N times faster."""
+    marks = [(0.0, 0.0, 1.0)] + [(g["touch"], g["cut"], g.get("slow", 1.0)) for g in log.get("gestures", [])]
+    marks.append((seconds, None, 1.0))
     out = []
-    for (film, recording), (next_film, next_recording) in zip(marks, marks[1:]):
+    for (film, recording, slow), (next_film, next_recording, _) in zip(marks, marks[1:]):
         length = next_film - film
-        if next_recording is not None and next_recording - recording < length - 1e-3:
+        if next_recording is not None and next_recording - recording < length * slow - 1e-3:
             fail(f"the recording has {next_recording - recording:.2f}s between the touches at {film:.2f}s and "
-                 f"{next_film:.2f}s, which the film gives {length:.2f}s")
-        out.append((recording, length))
+                 f"{next_film:.2f}s, which the film needs {length * slow:.2f}s of")
+        out.append((recording, length, slow))
     return out
 
 
@@ -169,14 +174,16 @@ def main():
     frames = work / "frames"
     shutil.rmtree(frames, ignore_errors=True)
     frames.mkdir()
-    # The simulator records a frame only when the screen changes, so the recording is
-    # evened to the film's rate first: a still stretch has frames to cut from.
-    trims = "".join(f"[e{i}]trim=start={log['zero'] + start:.3f}:duration={length:.3f},setpts=PTS-STARTPTS[s{i}];"
-                    for i, (start, length) in enumerate(pieces))
+    # The simulator records a frame only when the screen changes, so each stretch is
+    # evened to the film's rate first (N times it for a stretch the app slowed N
+    # times), then played back at the film's speed.
     copies = "".join(f"[e{i}]" for i in range(len(pieces)))
+    trims = "".join(f"[e{i}]fps={fps * slow:g},trim=start={log['zero'] + start:.3f}:duration={length * slow:.3f},"
+                    f"setpts=(PTS-STARTPTS)/{slow:g}[s{i}];"
+                    for i, (start, length, slow) in enumerate(pieces))
     joined = "".join(f"[s{i}]" for i in range(len(pieces)))
     run(["ffmpeg", "-v", "error", "-i", recording, "-filter_complex",
-         f"[0:v]fps={fps},split={len(pieces)}{copies};{trims}{joined}concat=n={len(pieces)}:v=1:a=0,"
+         f"[0:v]split={len(pieces)}{copies};{trims}{joined}concat=n={len(pieces)}:v=1:a=0,fps={fps},"
          f"scale={screen['width']}:{screen['height']}:flags=lanczos[out]",
          "-map", "[out]", "-frames:v", count, "-start_number", 0, frames / "%05d.png"])
     made = len(list(frames.glob("*.png")))
