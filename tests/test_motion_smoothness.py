@@ -88,6 +88,24 @@ def main():
                               capture_output=True, text=True)
         check("a camera move it is told to skip is not judged", done.returncode == 0, done.stderr.strip()[-200:])
 
+        # A slow map drawn at half the frame rate: each picture twice. Its steps are too
+        # small for the phase correlation to judge, but every other frame is a repeat.
+        halved = tmp / "halved.mp4"
+        write(halved, [0.2 * (n - n % 2) for n in range(frames)])
+        code, said = judge(halved)
+        check("a slow picture drawn at half the frame rate is jerky", code == 1 and not said.endswith(" 0 holds"), said)
+        slow = tmp / "slow.mp4"
+        write(slow, [0.2 * n for n in range(frames)])
+        code, said = judge(slow)
+        check("and drawn on every frame it is smooth", code == 0, said)
+
+        # Typing: a picture that changes now and then and holds in between is not a stall.
+        typed = tmp / "typed.mp4"
+        write(typed, [8.0 * (n // 4) for n in range(frames)])
+        done = subprocess.run([sys.executable, str(CHECK), str(typed)], capture_output=True, text=True)
+        check("a picture that changes every fourth frame has no holds", " 0 holds" in done.stdout + done.stderr,
+              (done.stdout + done.stderr).strip()[-200:])
+
         # The simulator: holds a picture for 5 frames, then jumps to where it should be.
         stall = tmp / "stall.mp4"
         positions = [speed * (n - (n % 6 if 60 <= n < 120 else 0)) for n in range(frames)]
