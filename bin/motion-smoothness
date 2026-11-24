@@ -19,7 +19,7 @@ easing in or out follows and a stall does not:
   jump     a step over JUMP x its neighbours'
   cadence  the steps' spread, median |step / neighbours' - 1|, over CADENCE
   hold     a frame that repeats the one before, with the picture changing on most
-           frames on both sides of it: a slow picture drawn at half the frame rate,
+           frames on both sides of it, and alike just before and just after: a slow picture drawn at half the frame rate,
            or a map that stops drawing for a few frames, which is too small a step
            for the phase correlation above to judge
 
@@ -54,6 +54,7 @@ HELD = 0.03              # mean grey levels a frame differs from the last by, at
 CHANGED = 0.1            # mean grey levels a frame differs from the last by, at least, to change
 AROUND = 0.2             # seconds either side of a held frame
 BUSY = 0.4               # share of those frames that change, both sides, for a hold to be a stall
+ALIKE = 3.0              # at most this ratio between the changes just before a hold and just after
 
 
 def shown(times):
@@ -124,7 +125,14 @@ def holds(path, fps):
             runs[-1] = (runs[-1][0], runs[-1][1] + 1)
         else:
             runs.append((i, 1))
-    return runs
+    # One motion stalling changes the picture alike just before the hold and just after;
+    # a title that has landed and the next one knocking in do not.
+    def alike(i, run):
+        if i == 0 or i + run >= len(change):
+            return False
+        before, after = change[i - 1], change[i + run]
+        return min(before, after) > CHANGED and max(before, after) <= ALIKE * min(before, after)
+    return [(i, run) for i, run in runs if alike(i, run)]
 
 
 def judge(steps, same, fps, skip=(), times=None):
