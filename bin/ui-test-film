@@ -102,7 +102,7 @@ def camera(board, log):
     return out
 
 
-def segments(log, seconds):
+def segments(log, seconds, slow=1.0):
     """The film as stretches of the recording, each starting at a gesture's touch.
 
     A gesture takes the simulator one to three seconds, so the test plays each
@@ -110,10 +110,10 @@ def segments(log, seconds):
     still moment before each touch: a touch at `touch` in the film is at `cut`
     in the recording. Nothing inside an action is dropped.
 
-    A gesture with `"slow": N` had the app play the stretch after it N times
-    slower, so a loaded simulator drew every frame of it; that stretch is N
+    A gesture with `"slow": N` (or the storyboard's own `"slow"`, for every
+    stretch) had the app play the stretch after it N times slower, so a loaded simulator drew every frame of it; that stretch is N
     times as long in the recording and is played back N times faster."""
-    marks = [(0.0, 0.0, 1.0)] + [(g["touch"], g["cut"], g.get("slow", 1.0)) for g in log.get("gestures", [])]
+    marks = [(0.0, 0.0, slow)] + [(g["touch"], g["cut"], g.get("slow", slow)) for g in log.get("gestures", [])]
     marks.append((seconds, None, 1.0))
     out = []
     for (film, recording, slow), (next_film, next_recording, _) in zip(marks, marks[1:]):
@@ -169,7 +169,7 @@ def main():
     seconds = board.get("seconds", 30)
     count = round(seconds * fps)
 
-    pieces = segments(log, seconds)
+    pieces = segments(log, seconds, board.get("slow", 1.0))
     say(f"cutting {seconds:g}s from {len(pieces)} stretches of the recording")
     frames = work / "frames"
     shutil.rmtree(frames, ignore_errors=True)
@@ -184,6 +184,8 @@ def main():
     joined = "".join(f"[s{i}]" for i in range(len(pieces)))
     run(["ffmpeg", "-v", "error", "-i", recording, "-filter_complex",
          f"[0:v]split={len(pieces)}{copies};{trims}{joined}concat=n={len(pieces)}:v=1:a=0,fps={fps},"
+         # Each stretch rounds down to whole frames; the last frame is held for those.
+         f"tpad=stop_mode=clone:stop_duration={len(pieces) / fps:.3f},"
          f"scale={screen['width']}:{screen['height']}:flags=lanczos[out]",
          "-map", "[out]", "-frames:v", count, "-start_number", 0, frames / "%05d.png"])
     made = len(list(frames.glob("*.png")))
