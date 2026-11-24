@@ -9,11 +9,14 @@ was not drawn at adds a judder of its own, a step of one source frame and then
 two. Both read as jerky, and neither is easy to see in one viewing on a laptop.
 This measures it.
 
-For each frame it finds how far the moving part of the picture went since the
-frame before (lib/motion.py: phase correlation block by block, over the blocks
-that change during the video). Each step is compared with the median of the
+For each frame it finds how far each part of the picture went since the frame
+before (lib/motion.py: phase correlation block by block, over the blocks that
+change during the video). Each block's step is compared with that block's own
 steps on either side of it (a twentieth of a second each way), which a camera
-easing in or out follows and a stall does not:
+easing in or out follows and a stall does not, and a frame's ratio is the median
+over the blocks that are moving. Each layer is judged against itself: a phone or
+a card held still over a room drifting behind it is two layers, and one median
+over all the blocks flips between them from frame to frame.
 
   freeze   a step under FREEZE x its neighbours', between moving frames
   jump     a step over JUMP x its neighbours'
@@ -24,6 +27,8 @@ easing in or out follows and a stall does not:
            for the phase correlation above to judge
 
 A picture that is not moving, or barely, is not judged: a still is not a stall.
+Barely is under half an analysis pixel a frame (about a pixel of a 1080p film):
+a hitch that small cannot be seen.
 Nor is a span given with --skip: product-video passes its own camera moves, which
 it draws on a curve, since a move eased to a stop slows by twice a frame as it
 lands and would read as a freeze or a jump.
@@ -38,7 +43,7 @@ on any fault, with the worst frames and their times.
                                                # before it beside the frame after, so one look
                                                # says what jumped, with no frame-by-frame viewing
 """
-import argparse, json, os, subprocess, sys
+import argparse, json, os, subprocess, sys, warnings
 
 import numpy as np
 
@@ -49,7 +54,8 @@ FREEZE = 0.4
 JUMP = 1.6
 CADENCE = 0.1
 NEAR = 0.05              # seconds either side that are a step's neighbours
-STILL = 0.1              # a local median under this many analysis pixels a frame is a still
+STILL = 0.5              # a local median under this many analysis pixels a frame is a still
+LAYER = 0.25             # under this share of the blocks moving, details are changing (digits, a title landing), not the picture moving
 HELD = 0.03              # mean grey levels a frame differs from the last by, at most, to repeat it
 CHANGED = 0.1            # mean grey levels a frame differs from the last by, at least, to change
 AROUND = 0.2             # seconds either side of a held frame
@@ -66,6 +72,13 @@ def shown(times):
     return lasts >= typical / 2, typical
 
 
+def blocks(a, b):
+    """How far each block went from a to b, and whether b is the same picture at all. A
+    block with no clear peak (flat, dim or noisy picture) says nothing: NaN."""
+    dx, dy, peak = motion.vectors(a, b)
+    return np.where(peak >= motion.PEAK, np.hypot(dx, dy), np.nan), bool(np.median(peak) >= motion.PEAK)
+
+
 def measure(path, loop):
     width, height, times = motion.probe(path)
     seen, typical = shown(times)
@@ -74,7 +87,7 @@ def measure(path, loop):
     count = max(len(times) - 1 + loop, 0)
     fps = 1 / typical
     if not corners:
-        return np.zeros(count), np.ones(count, bool), times, fps
+        return np.zeros((count, 1)), np.ones(count, bool), times, fps
     steps, same, first, before = [], [], None, None
     for frame, keep in zip(motion.frames(path, width, height), seen):
         if not keep:
@@ -83,19 +96,16 @@ def measure(path, loop):
         if before is None:
             first = frame
         else:
-            moved, kept = motion.step(before, frame)
-            steps.append(moved)
-            same.append(kept)
+            steps.append(blocks(before, frame))
         before = frame
     if loop:
-        moved, kept = motion.step(before, first)
-        steps.append(moved)
-        same.append(kept)
-    steps, same = np.array(steps), np.array(same)
+        steps.append(blocks(before, first))
+    same = np.array([kept for _, kept in steps], bool)
+    steps = np.array([moved for moved, _ in steps]) if steps else np.zeros((0, len(corners)))
     gaps = np.diff(times)[:len(steps)]
     if len(gaps) == len(steps) and len(gaps) and np.ptp(gaps) > 1e-3:
         # A recording's frames are not evenly spaced; judge speed, not step.
-        steps = steps * typical / np.maximum(gaps, 1e-4)
+        steps = steps * typical / np.maximum(gaps, 1e-4)[:, None]
     return steps, same, times, fps
 
 
@@ -136,21 +146,32 @@ def holds(path, fps):
 
 
 def judge(steps, same, fps, skip=(), times=None):
+    """Each frame's step, its neighbours', their ratio, whether it was judged, the faults
+    and the spread, from every block's step (frames x blocks)."""
     reach = max(2, int(round(NEAR * fps)))
-    local = np.zeros(len(steps))
-    for i in range(len(steps)):
-        around = np.r_[max(0, i - reach):i, i + 1:min(len(steps), i + reach + 1)]
+    count = len(steps)
+    local = np.full(steps.shape, np.nan)
+    for i in range(count):
+        around = np.r_[max(0, i - reach):i, i + 1:min(count, i + reach + 1)]
         around = around[same[around]]
         if len(around):
-            local[i] = np.median(steps[around])
-    judged = same & (local > STILL)
+            with np.errstate(all="ignore"), warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                local[i] = np.nanmedian(steps[around], axis=0)
+    moving = (np.nan_to_num(local) > STILL) & ~np.isnan(steps)
+    layer = moving.sum(axis=1) >= max(1, LAYER * steps.shape[1])
+    judged = same & layer
     for start, end in skip:
-        judged &= ~((times[:len(steps)] >= start - NEAR) & (times[:len(steps)] <= end + NEAR))
-    ratio = np.where(judged, steps / np.maximum(local, 1e-6), 1.0)
+        judged &= ~((times[:count] >= start - NEAR) & (times[:count] <= end + NEAR))
+    ratio, step, around = np.ones(count), np.median(np.nan_to_num(steps), axis=1), np.median(np.nan_to_num(local), axis=1)
+    for i in np.flatnonzero(layer):
+        ratio[i] = np.median(steps[i, moving[i]] / local[i, moving[i]])
+        step[i], around[i] = np.median(steps[i, moving[i]]), np.median(local[i, moving[i]])
+    ratio = np.where(judged, ratio, 1.0)
     faults = [("freeze", i) for i in np.flatnonzero(judged & (ratio < FREEZE))] + \
              [("jump", i) for i in np.flatnonzero(judged & (ratio > JUMP))]
     spread = float(np.median(np.abs(ratio[judged] - 1))) if judged.any() else 0.0
-    return local, ratio, judged, faults, spread
+    return step, around, ratio, judged, faults, spread
 
 
 def picture(video, before, after, out):
@@ -173,7 +194,7 @@ def main():
 
     steps, same, times, fps = measure(args.video, args.loop)
     skip = [tuple(float(t) for t in span.split("-")) for span in args.skip]
-    local, ratio, judged, faults, spread = judge(steps, same, fps, skip, times)
+    steps, local, ratio, judged, faults, spread = judge(steps, same, fps, skip, times)
     freezes = sum(1 for kind, _ in faults if kind == "freeze")
     jumps = len(faults) - freezes
     stalls = holds(args.video, fps)

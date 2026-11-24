@@ -127,6 +127,13 @@ def main():
         code, said = judge(judder)
         check("60 Hz kept at 50 is jerky", code == 1, said)
 
+        # A room drifting a fifth of a pixel a frame behind a phone, a frame dropped in
+        # five: a hitch of a fifth of a pixel nobody can see, not a jerky film.
+        drift = tmp / "drift.mp4"
+        write(drift, [0.2 * (n + n // 5) for n in range(frames)])
+        code, said = judge(drift)
+        check("a drift too slow to see judder is not judged", code == 0, said)
+
         # A recording: each picture once on time with a copy 2 ms after it, and for the
         # middle second a picture every 50 ms (pictures 60, 63, ... 117).
         positions = [speed * n for n in range(60) for _ in (0, 1)] + \
