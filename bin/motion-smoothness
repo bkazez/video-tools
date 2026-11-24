@@ -20,12 +20,16 @@ easing in or out follows and a stall does not:
   cadence  the steps' spread, median |step / neighbours' - 1|, over CADENCE
 
 A picture that is not moving, or barely, is not judged: a still is not a stall.
+Nor is a span given with --skip: product-video passes its own camera moves, which
+it draws on a curve, since a move eased to a stop slows by twice a frame as it
+lands and would read as a freeze or a jump.
 Nor is a cut, where nothing in one frame has a counterpart in the next. Exit 1
 on any fault, with the worst frames and their times.
 
     motion-smoothness film.mp4
     motion-smoothness --loop loop.mp4          # the last frame into the first, too
     motion-smoothness --json film.mp4          # every step, for a plot
+    motion-smoothness --skip 7.0-7.75 --skip 9.0-9.5 film.mp4
     motion-smoothness --frames out/ film.mp4   # each fault printed, as a picture: the frame
                                                # before it beside the frame after, so one look
                                                # says what jumped, with no frame-by-frame viewing
@@ -81,7 +85,7 @@ def measure(path, loop):
     return steps, same, times, fps
 
 
-def judge(steps, same, fps):
+def judge(steps, same, fps, skip=(), times=None):
     reach = max(2, int(round(NEAR * fps)))
     local = np.zeros(len(steps))
     for i in range(len(steps)):
@@ -90,6 +94,8 @@ def judge(steps, same, fps):
         if len(around):
             local[i] = np.median(steps[around])
     judged = same & (local > STILL)
+    for start, end in skip:
+        judged &= ~((times[:len(steps)] >= start - NEAR) & (times[:len(steps)] <= end + NEAR))
     ratio = np.where(judged, steps / np.maximum(local, 1e-6), 1.0)
     faults = [("freeze", i) for i in np.flatnonzero(judged & (ratio < FREEZE))] + \
              [("jump", i) for i in np.flatnonzero(judged & (ratio > JUMP))]
@@ -110,11 +116,14 @@ def main():
     parser.add_argument("--loop", action="store_true", help="also judge the last frame into the first")
     parser.add_argument("--json", action="store_true", help="print every step")
     parser.add_argument("--worst", type=int, default=8, help="how many faults to print")
+    parser.add_argument("--skip", action="append", default=[], metavar="START-END",
+                        help="seconds not judged: the film's own camera moves")
     parser.add_argument("--frames", metavar="DIR", help="save each printed fault's frames before and after it here")
     args = parser.parse_args()
 
     steps, same, times, fps = measure(args.video, args.loop)
-    local, ratio, judged, faults, spread = judge(steps, same, fps)
+    skip = [tuple(float(t) for t in span.split("-")) for span in args.skip]
+    local, ratio, judged, faults, spread = judge(steps, same, fps, skip, times)
     freezes = sum(1 for kind, _ in faults if kind == "freeze")
     jumps = len(faults) - freezes
     cuts = int((~same).sum())

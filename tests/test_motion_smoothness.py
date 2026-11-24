@@ -79,6 +79,15 @@ def main():
         code, said = judge(even)
         check("an even pan is smooth", code == 0, said)
 
+        # A camera easing out of a still and into one again, as product-video moves it:
+        # slowing by twice a frame as it lands is a freeze, unless the move is skipped.
+        ease = tmp / "ease.mp4"
+        write(ease, [0.0] * 30 + [90 * (4 * t ** 3 if t < 0.5 else 1 - (-2 * t + 2) ** 3 / 2)
+                                  for t in (n / 45 for n in range(46))] + [90.0] * 30)
+        done = subprocess.run([sys.executable, str(CHECK), "--skip", f"{30 / FPS}-{75 / FPS}", str(ease)],
+                              capture_output=True, text=True)
+        check("a camera move it is told to skip is not judged", done.returncode == 0, done.stderr.strip()[-200:])
+
         # The simulator: holds a picture for 5 frames, then jumps to where it should be.
         stall = tmp / "stall.mp4"
         positions = [speed * (n - (n % 6 if 60 <= n < 120 else 0)) for n in range(frames)]
