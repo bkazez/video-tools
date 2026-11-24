@@ -96,6 +96,17 @@ aiming and what it would have been playing. Two are worked: `Arc --movie` in
 `~/Projects/wavelength` stands in an iPhone bezel in a room, with `bin/make-video`
 in each tying the two halves together.
 
+An app made of MapKit, SwiftUI springs and UIKit transitions cannot draw itself
+one frame at a time: those run on the wall clock. There the UI test is the frame
+source. It plays the storyboard's gestures (visual-test-tools' Filming,
+`playFilm`), the simulator records it (`sim-film`), and `bin/ui-test-film` cuts the
+recording so each gesture lands on its beat and hands it to `product-video`. FlightTrack
+is the worked one (`ios/bin/make-video` in `~/Projects/flighttrack`).
+
+    simq run -- bin/ui-test-film edit.json --project App.xcodeproj --scheme App \
+        --test AppUITests/ProductFilmTests/testTheProductFilm --out film.mp4
+    bin/ui-test-film edit.json --recording /tmp/ui-test-film-film/recording.mp4 --out film.mp4
+
 A product smaller than the picture declares a `canvas` and a `chrome` device, and
 `--backdrop DIR` puts footage of the room behind it. `--layout` prints where the
 device stands and how big its glass is, in master pixels, because the frame

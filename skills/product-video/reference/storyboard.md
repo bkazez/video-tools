@@ -105,6 +105,33 @@ playing changes, **including on every seek**. The assembler renders each entry
 through the product and crossfades the joins. Silence is an entry that renders
 nothing; a film that hides a real silence is lying about the product.
 
+## A product that cannot draw itself one frame at a time
+
+MapKit, SwiftUI springs and UIKit transitions run on the wall clock, so an app
+built of them cannot be stepped a frame at a time: a snapshot per frame shows
+its animations in jumps. Its UI test is the frame source instead. It plays each `"do"` after the last one has landed, and aims
+each `"camera"` at the element the screen calls that name (an accessibility
+identifier, or a label), once it has stopped sliding:
+
+```swift
+import Filming
+
+try playFilm(in: app, lead: { _ in 0.3 }) { step in   // a press lands as it lifts
+    switch step {
+    case "back": pressByHand(app.buttons["back"], after: 0)
+    default: XCTFail("no gesture \"\(step)\"")
+    }
+}
+```
+
+A gesture takes a loaded simulator one to three seconds, so `bin/ui-test-film`
+cuts the recording rather than playing it in real time: each stretch starts at
+a gesture's touch, the still moment before it is dropped, and every gesture
+lands on its beat. Nothing inside an action is cut or sped up. The camera's
+timing is the storyboard's, so changing a move recuts without a new recording.
+FlightTrack is the worked example: `ios/FlightsUITests/ProductFilmTests.swift`,
+`ios/bin/make-video`, `marketing/edit.json`.
+
 ## Refusals a frame source owes you
 
 Each of these was a real defect that shipped or nearly shipped:

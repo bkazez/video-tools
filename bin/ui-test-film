@@ -1,0 +1,199 @@
+#!/usr/bin/env python3
+"""ui-test-film - a product film of an iOS app whose UI test is its frame source.
+
+    ui-test-film STORYBOARD --project P.xcodeproj --scheme S --test TARGET/Class/testMethod \\
+                 --device iPhone-16-Pro-Max --out film.mp4 [--variant vertical] [--recording R.mp4]
+
+An app that is MapKit, SwiftUI springs and UIKit transitions cannot draw itself
+one frame at a time the way Wavelength and arc do: those run on the wall clock,
+and a frame-stepped snapshot shows them in jumps. So the app runs at its own
+speed, its UI test plays the storyboard's gestures (Filming's playFilm, in
+visual-test-tools), and the simulator records it (sim-film). A gesture takes
+the simulator a second or three, so this cuts the recording into stretches that
+each start at a gesture's touch, dropping the still moment before it, so every
+gesture lands on its beat; at the size the device's glass will be, it
+writes the timeline -- the app's size and every camera move aimed where the
+test found its place -- and hands the frames to product-video, which does the
+bezel, the camera, the titles, the poster and the smoothness check, the same as
+for every other product.
+
+The recording and the test's log stay in --work, so a second cut (a title
+changed, the --variant vertical film) needs no simulator:
+
+    ui-test-film STORYBOARD --recording WORK/recording.mp4 --out film-vertical.mp4 --variant vertical
+
+Run the recording through simq: `simq run -- ui-test-film ...`.
+"""
+
+import argparse
+import json
+import os
+import pathlib
+import shutil
+import subprocess
+import sys
+
+HERE = pathlib.Path(__file__).resolve().parent
+COMPOSITOR = HERE / "product-video"
+SIM_FILM = pathlib.Path.home() / "Projects/visual-test-tools/bin/sim-film"
+
+
+def say(message):
+    print(f"==> {message}", flush=True)
+
+
+def fail(message):
+    sys.exit(f"ui-test-film: {message}")
+
+
+def run(argv, **kwargs):
+    return subprocess.run([str(a) for a in argv], check=True, text=True, **kwargs)
+
+
+def on_the_beat(board):
+    """Every gesture lands on the storyboard's grid, as every title does."""
+    beat = board.get("beat")
+    if not beat:
+        return
+    grid = beat / board.get("subdivide", 1)
+    slack = 0.5 / board.get("fps", 30)
+    for event in board.get("events", []):
+        if "do" in event:
+            at = event["at"]
+            if abs(at - round(at / grid) * grid) > slack:
+                fail(f"\"{event['do']}\" at {at}s is off the beat ({grid:g}s grid)")
+
+
+def record(storyboard, options, recording):
+    say("recording the test")
+    env = {**os.environ, "TEST_RUNNER_FILM_BOARD": str(storyboard)}
+    if options.status_time:
+        env["STATUS_TIME"] = options.status_time
+    if options.privacy:
+        env["PRIVACY"] = options.privacy
+    run([SIM_FILM, options.project, options.scheme, options.test, options.device, recording], env=env)
+
+
+def report(log):
+    """Each gesture: its moment, how long the simulator took over it, and where it was cut in."""
+    for gesture in log.get("gestures", []):
+        print(f"  {gesture['at']:6.2f}s  {gesture['do']:24s}  took {gesture['ended'] - gesture['began']:5.2f}s, "
+              f"touch at {gesture['cut']:6.2f}s of recording")
+    for move in log.get("camera", []):
+        print(f"  {move['at']:6.2f}s  camera on ({move['x']:.0f}, {move['y']:.0f})")
+
+
+def camera(board, log):
+    """The storyboard's camera moves, each aimed where the test found its place.
+
+    The moves' timing is the storyboard's, so a recut after a change to them needs
+    no new recording; only where each place was on screen comes from the test."""
+    moves = sorted((e["at"], e["camera"]) for e in board.get("events", []) if "camera" in e)
+    found = {}
+    for where in log.get("camera", []):
+        found.setdefault(where["place"], (where["x"], where["y"]))
+    out = []
+    for at, move in moves:
+        if move["at"] not in found:
+            fail(f"the camera move at {at}s is aimed at \"{move['at']}\", which the recording never "
+                 f"looked for: record again")
+        x, y = found[move["at"]]
+        out.append({"at": at, "to": move.get("to", 1), "seconds": move.get("seconds", 1), "x": x, "y": y})
+    return out
+
+
+def segments(log, seconds):
+    """The film as stretches of the recording, each starting at a gesture's touch.
+
+    A gesture takes the simulator one to three seconds, so the test plays each
+    one after the last has landed (Filming's playFilm) and the film drops the
+    still moment before each touch: a touch at `touch` in the film is at `cut`
+    in the recording. Nothing inside an action is dropped or sped up."""
+    marks = [(0.0, 0.0)] + [(g["touch"], g["cut"]) for g in log.get("gestures", [])] + [(seconds, None)]
+    out = []
+    for (film, recording), (next_film, next_recording) in zip(marks, marks[1:]):
+        length = next_film - film
+        if next_recording is not None and next_recording - recording < length - 1e-3:
+            fail(f"the recording has {next_recording - recording:.2f}s between the touches at {film:.2f}s and "
+                 f"{next_film:.2f}s, which the film gives {length:.2f}s")
+        out.append((recording, length))
+    return out
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("storyboard", type=pathlib.Path)
+    parser.add_argument("--project")
+    parser.add_argument("--scheme")
+    parser.add_argument("--test")
+    parser.add_argument("--device", default="iPhone-16-Pro-Max",
+                        help="a simulator device type whose screen is the bezel's hole")
+    parser.add_argument("--out", type=pathlib.Path, required=True)
+    parser.add_argument("--variant", help="the storyboard's named variant block, such as `vertical`")
+    parser.add_argument("--recording", type=pathlib.Path,
+                        help="cut this recording (its test log beside it, .log) instead of making one")
+    parser.add_argument("--status-time", help="HH:MM in the status bar, for data laid around now")
+    parser.add_argument("--privacy", help='permissions settled before the test, so no prompt is filmed: '
+                                          '"grant location com.example.App; revoke contacts com.example.App"')
+    parser.add_argument("--work", type=pathlib.Path, help="where the recording and frames go")
+    options = parser.parse_args()
+
+    storyboard = options.storyboard.resolve()
+    board = json.loads(storyboard.read_text())
+    run([COMPOSITOR, storyboard, "--check"])
+    on_the_beat(board)
+    out = options.out.resolve()
+    work = (options.work or pathlib.Path("/tmp") / f"ui-test-film-{out.stem}").resolve()
+    work.mkdir(parents=True, exist_ok=True)
+
+    recording = options.recording.resolve() if options.recording else work / "recording.mp4"
+    if not options.recording:
+        if not (options.project and options.scheme and options.test):
+            fail("--project, --scheme and --test make the recording; or cut one with --recording")
+        record(storyboard, options, recording)
+    log_path = recording.with_suffix(".log")
+    if not log_path.exists():
+        fail(f"no {log_path.name}: the test did not play the storyboard (Filming's playFilm)")
+    log = json.loads(log_path.read_text())
+    report(log)
+
+    layout_argv = [COMPOSITOR, storyboard, "--layout"] + (["--variant", options.variant] if options.variant else [])
+    places = json.loads(run(layout_argv, capture_output=True).stdout)
+    screen, scale = places["screen"], places["scale"]
+    fps = board.get("fps", 30)
+    seconds = board.get("seconds", 30)
+    count = round(seconds * fps)
+
+    pieces = segments(log, seconds)
+    say(f"cutting {seconds:g}s from {len(pieces)} stretches of the recording")
+    frames = work / "frames"
+    shutil.rmtree(frames, ignore_errors=True)
+    frames.mkdir()
+    # The simulator records a frame only when the screen changes, so the recording is
+    # evened to the film's rate first: a still stretch has frames to cut from.
+    trims = "".join(f"[e{i}]trim=start={log['zero'] + start:.3f}:duration={length:.3f},setpts=PTS-STARTPTS[s{i}];"
+                    for i, (start, length) in enumerate(pieces))
+    copies = "".join(f"[e{i}]" for i in range(len(pieces)))
+    joined = "".join(f"[s{i}]" for i in range(len(pieces)))
+    run(["ffmpeg", "-v", "error", "-i", recording, "-filter_complex",
+         f"[0:v]fps={fps},split={len(pieces)}{copies};{trims}{joined}concat=n={len(pieces)}:v=1:a=0,"
+         f"scale={screen['width']}:{screen['height']}:flags=lanczos[out]",
+         "-map", "[out]", "-frames:v", count, "-start_number", 0, frames / "%05d.png"])
+    made = len(list(frames.glob("*.png")))
+    if made < count:
+        fail(f"the recording ran out after {made} of {count} frames")
+
+    canvas = {"width": places["canvas"]["width"] / scale, "height": places["canvas"]["height"] / scale}
+    timeline = {"fps": fps, "frames": count, "width": log["width"], "height": log["height"],
+                "scale": scale, "canvas": canvas, "chrome": board.get(options.variant or "", {}).get(
+                    "chrome", board.get("chrome")), "camera": camera(board, log)}
+    (frames / "timeline.json").write_text(json.dumps(timeline, indent=2))
+
+    say("putting the film on it")
+    run([COMPOSITOR, storyboard, "--frames", frames, "--out", out,
+         "--width", places["canvas"]["width"], "--poster-at", board.get("poster_at", 3)])
+    say(f"{out}; the recording is {recording}")
+
+
+if __name__ == "__main__":
+    main()
