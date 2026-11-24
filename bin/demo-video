@@ -1,0 +1,103 @@
+#!/usr/bin/env python3
+"""demo-video - a plain 16:9 demo of a phone app with the maker talking over it,
+the kind Hacker News asks a Show HN to link on YouTube.
+
+    demo-video frame SCREEN.mp4 --out picture.mp4
+    demo-video narrate picture.mp4 --out demo.mp4 [--device NAME]
+    arc youtube upload demo.mp4 --title "FlightTrack demo" --privacy unlisted
+
+frame     puts a portrait screen recording, full height, in the middle of a
+          1920x1080 black picture. Nothing else: no bezel, titles or music.
+narrate   plays the picture full screen and records your voice over it with
+          `arc capture`, then sets the voice to -14 LUFS (YouTube's playback
+          level) and muxes it. One take, no script; run it again to retake.
+
+The screen recording comes from the app's own UI test (UITests/DemoVideoTests.swift),
+so the picture can be made again whenever the app changes.
+"""
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import time
+
+WIDTH, HEIGHT, RATE = 1920, 1080, 30
+LUFS, TRUE_PEAK = -14, -1.5
+
+
+def run(*cmd, **kw):
+    return subprocess.run(cmd, check=True, **kw)
+
+
+def duration(path):
+    out = run("ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path,
+              capture_output=True, text=True).stdout
+    return float(out)
+
+
+def loudness(path):
+    stderr = run("ffmpeg", "-hide_banner", "-i", path, "-af",
+                 f"loudnorm=I={LUFS}:TP={TRUE_PEAK}:LRA=11:print_format=json", "-f", "null", "-",
+                 capture_output=True, text=True).stderr
+    return json.loads(stderr[stderr.rindex("{"):stderr.rindex("}") + 1])
+
+
+def frame(args):
+    run("ffmpeg", "-v", "error", "-y", "-i", args.screen, "-an",
+        "-vf", f"fps={RATE},scale=-2:{HEIGHT}:flags=lanczos,"
+               f"pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,format=yuv420p",
+        "-c:v", "libx264", "-preset", "slow", "-crf", "16", "-profile:v", "high",
+        "-movflags", "+faststart", args.out)
+    print(args.out)
+
+
+def narrate(args):
+    seconds = duration(args.picture)
+    with tempfile.TemporaryDirectory() as work:
+        voice = os.path.join(work, "voice.wav")
+        capture = ["arc", "capture", "--seconds", str(int(seconds) + 3), "--out", voice]
+        if args.device:
+            capture += ["--device", args.device]
+        input("Headphones on. Press Return, then talk over the picture until it ends. ")
+        recorder = subprocess.Popen(capture, stdout=subprocess.DEVNULL)
+        capture_started = time.time()
+        time.sleep(1)
+        playback_started = time.time()
+        run("ffplay", "-v", "error", "-fs", "-autoexit", "-an", args.picture)
+        recorder.wait()
+        if recorder.returncode:
+            sys.exit(f"demo-video: arc capture failed ({recorder.returncode})")
+        lead = playback_started - capture_started
+
+        trimmed = os.path.join(work, "trimmed.wav")
+        run("ffmpeg", "-v", "error", "-y", "-ss", f"{lead:.3f}", "-t", f"{seconds:.3f}", "-i", voice, trimmed)
+        measured = loudness(trimmed)
+        loudnorm = (f"loudnorm=I={LUFS}:TP={TRUE_PEAK}:LRA=11:linear=true"
+                    f":measured_I={measured['input_i']}:measured_TP={measured['input_tp']}"
+                    f":measured_LRA={measured['input_lra']}:measured_thresh={measured['input_thresh']}"
+                    f":offset={measured['target_offset']}")
+        run("ffmpeg", "-v", "error", "-y", "-i", args.picture, "-i", trimmed,
+            "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-af", f"{loudnorm},aresample=48000",
+            "-c:a", "aac", "-b:a", "256k", "-ac", "2", "-shortest", "-movflags", "+faststart", args.out)
+    print(args.out)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    jobs = parser.add_subparsers(dest="job", required=True)
+    f = jobs.add_parser("frame", help="portrait screen recording -> 1920x1080 picture")
+    f.add_argument("screen")
+    f.add_argument("--out", required=True)
+    n = jobs.add_parser("narrate", help="record your voice over the picture")
+    n.add_argument("picture")
+    n.add_argument("--out", required=True)
+    n.add_argument("--device", help="input device for arc capture; default is arc's preference")
+    args = parser.parse_args()
+    {"frame": frame, "narrate": narrate}[args.job](args)
+
+
+if __name__ == "__main__":
+    main()
