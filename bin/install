@@ -1,0 +1,7 @@
+#!/bin/sh
+# Link this repo's skills into ~/.claude/skills on this machine.
+set -eu
+REPO=$(cd "$(dirname "$0")/.." && pwd)
+for skill in "$REPO"/skills/*/; do
+    ln -sfn "${skill%/}" "$HOME/.claude/skills/$(basename "$skill")"
+done

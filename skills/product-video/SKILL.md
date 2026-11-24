@@ -99,6 +99,37 @@ Everything below is about honesty, and each one has cost somebody a re-shoot:
 - **Never speed up or trim the middle of an action.** If it is too slow to show
   in real time, that is a finding about the product.
 
+## A story first, told by the camera
+
+Write the story before a single event: one person, what they want, what is in
+their way, and how the product gets them there, as one sentence per beat. A
+tour of features is not a story, and a camera cannot rescue one. The titles
+say the story; the camera has to tell it too, the way Roger Deakins shoots:
+the audience should feel every move and notice none.
+
+- **Every move is motivated by the story.** It goes where a person in that
+  scene would look at that moment: in as the reading arrives, out when the
+  room or the trip is what matters. Give each camera event a `"why"` naming
+  the beat it serves. Read only the `why` lines, in order: they should retell
+  the story. A move whose why is "variety" or "energy" comes out.
+- **Stillness is the default.** Most shots hold or drift slowly; a move is
+  earned by a change in the story, such as a discovery, a decision or an
+  arrival. Restraint is what makes the one push that matters land.
+- **The camera has its own arc.** Open wide enough to establish where we are,
+  come closer as the stakes rise, and give the resolution and the end card
+  room to breathe. Do not reset to wide between beats out of habit.
+- **Gentle numbers.** For a device in its world, stay at 1.3x or under unless
+  a detail cannot be read otherwise. No move under 1.5 s. Never go in and back
+  out within one beat, and never reverse direction without a cut between.
+  Twelve pushes in 30 s between 1.0x and 2.6x read as zooming in and out of
+  the phone (Wavelength's site film before b7f1b28).
+- **Cut rather than whip.** When the story jumps to another place or time,
+  cut, and land the cut with the camera already easing in the direction the
+  next beat needs.
+
+Check by eye at full speed with the sound off: could a stranger retell the
+story, and did they notice the camera? If they noticed it, it is too much.
+
 ## Two zooms, not one
 
 Zooming the *content* (a timeline's scale, a map's level) shows more or less of
@@ -106,7 +137,8 @@ it. It cannot make a detail drawn in pixels -- a 15 ms crossfade, a button in a
 corner -- big enough to look at. That needs a **camera**: magnify the finished
 picture, move what you are zooming into toward the middle as you go, and clamp
 the move so the frame never shows what is outside the window. Keep the titles out
-of the camera or they scale with it and stop being readable.
+of the camera or they scale with it and stop being readable. The camera's
+moves follow the story (above), not the grid alone.
 
 ## Two things to check by eye every time
 

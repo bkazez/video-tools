@@ -7,6 +7,11 @@ started as (it was `edlutils` until 2026-08).
 
 Everything takes paths as arguments; nothing is specific to one session.
 
+The skills in `skills/` (product-video, camera-sync, colour-grading,
+davinci-resolve) reach Claude on a machine once it runs:
+
+    bin/install      # links each skill into ~/.claude/skills
+
 ## Camera and sync
 
 | Tool | Answers |
