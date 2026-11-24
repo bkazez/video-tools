@@ -87,8 +87,9 @@ Everything below is about honesty, and each one has cost somebody a re-shoot:
   under a caption about clean work is worse than showing nothing.
 - **Let the product's own feedback show.** Its toasts, its confidence markers,
   its cursor changes: they read as the software rather than as a video about it.
-- **Type fast; hold on the idea.** Typing goes in at a fluent typist's speed,
-  one `typeText` call (`typeByHand` in visual-test-tools' Filming): the viewer
+- **Type fast; hold on the idea.** Typing goes in a letter at a time, fast
+  (`typeByHand` in visual-test-tools' Filming), and only as much as the search
+  needs to find the thing: the viewer
   waits for what the typing finds, not for the letters. Spend the time saved on
   a hold after the moment that shows something new, long enough to grasp it.
 - **Leave out the app's housekeeping.** A row or prompt asking for a permission
