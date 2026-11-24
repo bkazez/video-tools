@@ -2,10 +2,17 @@
 """demo-video - a plain 16:9 demo of a phone app with the maker talking over it,
 the kind Hacker News asks a Show HN to link on YouTube.
 
-    demo-video frame SCREEN.mp4 --out picture.mp4
+    simq run --timeout 40 -- demo-video record --project ios/App.xcodeproj --scheme App \
+        --test AppUITests/DemoVideoTests/testDemo --bundle com.example.App --out screen.mp4
+    demo-video frame screen.mp4 --out picture.mp4
     demo-video narrate picture.mp4 --out demo.mp4 [--device NAME]
     arc youtube upload demo.mp4 --title "FlightTrack demo" --privacy unlisted
 
+record    plays the app's demo UI test in a fresh simulator and records the screen,
+          cut to the stretch between the test's DemoMarks.start() and
+          DemoMarks.end() (each appends "start|end EPOCH" to the file in
+          $DEMO_MARKS). --grant gives the app permissions before it opens, so
+          no system prompt covers the picture.
 frame     puts a portrait screen recording, full height, in the middle of a
           1920x1080 black picture. Nothing else: no bezel, titles or music.
 narrate   plays the picture full screen and records your voice over it with
@@ -43,6 +50,58 @@ def loudness(path):
                  f"loudnorm=I={LUFS}:TP={TRUE_PEAK}:LRA=11:print_format=json", "-f", "null", "-",
                  capture_output=True, text=True).stderr
     return json.loads(stderr[stderr.rindex("{"):stderr.rindex("}") + 1])
+
+
+def record(args):
+    project = os.path.abspath(args.project)
+    if os.path.exists(os.path.join(os.path.dirname(project), "project.yml")):
+        run("xcodegen", "generate", "--quiet", cwd=os.path.dirname(project))
+    device_type = next(line.rsplit("(", 1)[1].rstrip(")") for line in run(
+        "xcrun", "simctl", "list", "devicetypes", capture_output=True, text=True).stdout.splitlines()
+        if line.startswith(args.device + " ("))
+    sim = run("xcrun", "simctl", "create", "demo-video", device_type, capture_output=True, text=True).stdout.strip()
+    with tempfile.TemporaryDirectory() as work:
+        try:
+            run("xcrun", "simctl", "boot", sim)
+            run("xcrun", "simctl", "bootstatus", sim, stdout=subprocess.DEVNULL)
+            run("xcrun", "simctl", "status_bar", sim, "override", "--time", "9:41", "--dataNetwork", "wifi",
+                "--wifiMode", "active", "--wifiBars", "3", "--cellularMode", "active", "--cellularBars", "4",
+                "--operatorName", "", "--batteryState", "discharging", "--batteryLevel", "100")
+            run("xcrun", "simctl", "ui", sim, "appearance", args.appearance)
+            build = ["-project", project, "-scheme", args.scheme, "-destination", f"platform=iOS Simulator,id={sim}",
+                     "-derivedDataPath", os.path.join(work, "build"), "-only-testing:" + args.test, "-quiet"]
+            run("xcodebuild", "build-for-testing", *build,
+                "SWIFT_TREAT_WARNINGS_AS_ERRORS=NO", "GCC_TREAT_WARNINGS_AS_ERRORS=NO")
+            marks = os.path.join(work, "marks")
+            open(marks, "w").close()
+            test = subprocess.Popen(["xcodebuild", "test-without-building", *build],
+                                    env=dict(os.environ, TEST_RUNNER_DEMO_MARKS=marks))
+            while subprocess.run(["xcrun", "simctl", "get_app_container", sim, args.bundle],
+                                 capture_output=True).returncode:
+                if test.poll() is not None:
+                    sys.exit("demo-video: the test ended before it installed the app")
+                time.sleep(0.5)
+            for service in filter(None, args.grant.split(",")):
+                run("xcrun", "simctl", "privacy", sim, "grant", service, args.bundle)
+            raw = os.path.join(work, "screen.mp4")
+            recorder = subprocess.Popen(["xcrun", "simctl", "io", sim, "recordVideo", "--codec", "h264",
+                                         "--force", raw], stderr=subprocess.DEVNULL)
+            recording_started = time.time()
+            failed = test.wait()
+            recorder.send_signal(2)
+            recorder.wait()
+            if failed:
+                sys.exit(f"demo-video: {args.test} failed")
+            times = dict(line.split() for line in open(marks) if line.strip())
+            if not {"start", "end"} <= times.keys():
+                sys.exit(f"demo-video: {args.test} wrote no start and end marks ({marks})")
+            start, end = (float(times[k]) - recording_started for k in ("start", "end"))
+            run("ffmpeg", "-v", "error", "-y", "-ss", f"{start:.3f}", "-i", raw, "-t", f"{end - start:.3f}",
+                "-an", "-c:v", "libx264", "-preset", "slow", "-crf", "14", "-pix_fmt", "yuv420p", args.out)
+        finally:
+            subprocess.run(["xcrun", "simctl", "shutdown", sim], capture_output=True)
+            subprocess.run(["xcrun", "simctl", "delete", sim], capture_output=True)
+    print(args.out)
 
 
 def frame(args):
@@ -88,6 +147,15 @@ def narrate(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     jobs = parser.add_subparsers(dest="job", required=True)
+    r = jobs.add_parser("record", help="the app's demo UI test, recorded in a fresh simulator")
+    r.add_argument("--project", required=True)
+    r.add_argument("--scheme", required=True)
+    r.add_argument("--test", required=True, help="TARGET/CLASS/METHOD")
+    r.add_argument("--bundle", required=True)
+    r.add_argument("--grant", default="", help="simctl privacy services, comma-separated (location,camera,...)")
+    r.add_argument("--device", default="iPhone 16 Pro")
+    r.add_argument("--appearance", default="dark", choices=("dark", "light"))
+    r.add_argument("--out", required=True)
     f = jobs.add_parser("frame", help="portrait screen recording -> 1920x1080 picture")
     f.add_argument("screen")
     f.add_argument("--out", required=True)
@@ -96,7 +164,7 @@ def main():
     n.add_argument("--out", required=True)
     n.add_argument("--device", help="input device for arc capture; default is arc's preference")
     args = parser.parse_args()
-    {"frame": frame, "narrate": narrate}[args.job](args)
+    {"record": record, "frame": frame, "narrate": narrate}[args.job](args)
 
 
 if __name__ == "__main__":
