@@ -15,7 +15,7 @@ record    plays the app's demo UI test in a fresh simulator and records the scre
           no system prompt covers the picture.
 frame     puts a portrait screen recording, full height, in the middle of a
           1920x1080 black picture. Nothing else: no bezel, titles or music.
-narrate   plays the picture full screen and records your voice over it with
+narrate   plays the picture full screen at once and records your voice over it with
           `arc capture`, then sets the voice to -14 LUFS (YouTube's playback
           level) and muxes it. One take, no script; run it again to retake.
 
@@ -120,7 +120,6 @@ def narrate(args):
         capture = ["arc", "capture", "--seconds", str(int(seconds) + 3), "--out", voice]
         if args.device:
             capture += ["--device", args.device]
-        input("Headphones on. Press Return, then talk over the picture until it ends. ")
         recorder = subprocess.Popen(capture, stdout=subprocess.DEVNULL)
         capture_started = time.time()
         time.sleep(1)
