@@ -33,24 +33,28 @@ ground = rng.integers(0, 256, (HEIGHT * 8, WIDTH), dtype=np.uint8)
 ground = ((ground.astype(float) + np.roll(ground, 1, 0) + np.roll(ground, 1, 1)) / 3).astype(np.uint8)
 
 
-def picture(position):
-    """The ground `position` pixels along, with the held-still bar over it."""
+def picture(position, still=None):
+    """The ground `position` pixels along, with the held-still bar over it, and the
+    rows outside `still` (first, last) held still too."""
     whole = int(position)
     part = position - whole
     a = ground[whole:whole + HEIGHT].astype(float)
     b = ground[whole + 1:whole + 1 + HEIGHT].astype(float)
     frame = (a * (1 - part) + b * part).astype(np.uint8)
     frame[300:340, 200:280] = 255
+    if still:
+        frame[:still[0]] = 128
+        frame[still[1]:] = 128
     return np.repeat(frame[:, :, None], 3, axis=2)
 
 
-def write(path, positions, stamps=None):
+def write(path, positions, stamps=None, still=None):
     """A video of the ground at these positions: evenly timed, or at the times the ffmpeg
     expression `stamps` gives frame N, on a 1/600 s clock as a simulator's recording is."""
     from PIL import Image
     folder = path.parent
     for index, position in enumerate(positions):
-        Image.fromarray(picture(position)).save(folder / f"frame{index:05d}.png")
+        Image.fromarray(picture(position, still)).save(folder / f"frame{index:05d}.png")
     timing = ["-vf", "setpts=(" + stamps.replace(",", "\\,") + ")/TB", "-fps_mode", "passthrough", "-enc_time_base", "1/600",
               "-video_track_timescale", "600"] if stamps else []
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-framerate", str(FPS), "-i", str(folder / "frame%05d.png"),
@@ -118,6 +122,30 @@ def main():
                                     "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0", str(retimed)],
                                    capture_output=True, text=True).stdout.strip() or 0)
         check("with every frame the pan had", abs(count - frames) <= 2, f"{count} frames, not {frames}")
+
+        # A stock clip that drops every fifth frame, moving only in a band that starts on
+        # an odd row and ends on an even one at full size (analysis blocks 1 to 5), so the
+        # moving region's chroma box is a row taller than every other luma row in it.
+        stock = tmp / "stock.mp4"
+        write(stock, [speed * (n + n // 4) for n in range(frames)], still=(40, 171))
+        code, said = judge(stock)
+        check("a clip that drops a frame in five is jerky", code == 1, said)
+        evened = tmp / "evened.mp4"
+        done = subprocess.run([sys.executable, str(RETIME), str(stock), str(evened)], capture_output=True, text=True)
+        check("retime-recording runs on a moving region with odd edges",
+              done.returncode == 0, done.stderr.strip()[-300:])
+        code, said = judge(evened)
+        check("and makes it smooth", code == 0, said)
+
+        # A shot held still from its first frame is still as long once retimed.
+        held = tmp / "held.mp4"
+        write(held, [0.0] * 60)
+        kept = tmp / "kept.mp4"
+        subprocess.run([sys.executable, str(RETIME), str(held), str(kept)], capture_output=True)
+        count = int(subprocess.run(["ffprobe", "-v", "error", "-count_frames", "-select_streams", "v:0",
+                                    "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0", str(kept)],
+                                   capture_output=True, text=True).stdout.strip() or 0)
+        check("a still shot keeps its length", abs(count - 60) <= 1, f"{count} frames, not 60")
 
     if failures:
         print(f"\n{len(failures)} failed")

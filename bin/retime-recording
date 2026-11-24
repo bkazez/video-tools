@@ -44,8 +44,9 @@ def plan(path, width, height, fps, cut):
     corners = motion.moving_blocks(spread)
     _, _, times = motion.probe(path)
     start = cut.get("start") or 0.0
-    drawn, last, last_frame = [], None, None
+    drawn, last, last_frame, final = [], None, None, 0
     for index, frame in enumerate(motion.frames(path, width, height, **cut)):
+        final = index
         if last_frame is not None and np.abs(frame - last_frame).mean() < SAME:
             continue
         spectra = motion.spectra(frame, corners) if corners else None
@@ -66,6 +67,10 @@ def plan(path, width, height, fps, cut):
     for before, d in zip(drawn, drawn[1:]):
         d["gap"] = d["time"] - before["time"]
     drawn[0]["gap"] = 1 / fps
+    # A picture that holds to the end, as a still shot does from its first frame,
+    # stays on screen as long as the recording does rather than for one frame.
+    end = times[min(first + final, len(times) - 1)]
+    drawn[-1]["hold"] = max(1, round((end - drawn[-1]["time"]) * fps) + 1)
     moved = np.array([d["moved"] for d in drawn])
     times = np.array([d["time"] for d in drawn])
     for d in drawn:
@@ -133,7 +138,11 @@ def between(a, b, f, fit, moving, scale):
                 carried = np.abs(sample(pa, x - dx, y - dy) - pb[box])
                 stood = np.abs(pa[box].astype(np.float32) - pb[box])
                 carry = (carried <= stood) & moving[box]
-            here = carry if sub == 1 else carry[::2, ::2][:warped.shape[0], :warped.shape[1]]
+            # Each chroma pixel takes the luma decision at its own top-left pixel; the
+            # box can start on an odd luma row, so stepping by two from its edge is off by one.
+            here = carry if sub == 1 else carry[np.ix_(
+                np.clip(2 * np.arange(box[0].start, box[0].stop) - rows[0], 0, carry.shape[0] - 1),
+                np.clip(2 * np.arange(box[1].start, box[1].stop) - cols[0], 0, carry.shape[1] - 1))]
             region = plane[box]
             region[here] = warped[here]
         out.append(np.clip(plane + 0.5, 0, 255).astype(np.uint8))
@@ -155,8 +164,9 @@ def main():
     moving = regions(corners, spread.shape, width, height)
     scale = width / motion.WIDTH
     built = int(drawn[-1]["slot"]) + 1 - len(drawn)
+    held = drawn[-1]["hold"] - 1
     print(f"retime-recording: {len(drawn)} drawn frames, {built} built between them, "
-          f"{len(drawn) + built} at {args.fps:g} fps", file=sys.stderr)
+          f"{held} holding the last, {len(drawn) + built + held} at {args.fps:g} fps", file=sys.stderr)
 
     tags = json.loads(subprocess.run(
         ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
@@ -201,6 +211,8 @@ def main():
         last, slot = planes, target["slot"]
         target = next(wanted, None)
         if target is None:
+            for _ in range(held):
+                writer.stdin.write(raw)
             break
     reader.kill()
     reader.wait()
