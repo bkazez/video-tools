@@ -299,7 +299,10 @@ func run(_ tool: String, _ argv: [String]) -> String {
 let width = Int(number("--width", 1920))
 var encode = ["-y", "-framerate", "\(timeline.fps)", "-i", "\(dressed)/%05d.png"]
 if let audio = text("--audio") { encode += ["-i", audio] }
-encode += ["-c:v", "libx264", "-preset", "slow", "-crf", "20", "-pix_fmt", "yuv420p",
+// CRF 17, not 20: at 20 x264 skips the blocks of a dim room panning under a card
+// on alternate frames, and the pan visibly stutters (Wavelength's end card: 16
+// freezes and 15 jumps in 110 frames at 20, none at 17 or lossless).
+encode += ["-c:v", "libx264", "-preset", "slow", "-crf", "17", "-pix_fmt", "yuv420p",
            "-vf", "scale=\(width):-2"]
 if text("--audio") != nil {
     let gain = number("--gain-db", 0)
