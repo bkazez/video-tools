@@ -13,10 +13,11 @@ This keeps each picture the screen drew once, in order, and gives it as many
 frames at --fps as the picture moved: one where it drew at the display's rate,
 three where it drew a third as often. The frames it did not draw are built from
 the two drawn either side (lib/motion.py fits the motion between them), moving
-only what moved: a pixel goes with the motion only where that explains the next
-picture better than standing still does, so a plane the camera follows, its
-shadow and its route line stay put, and outside the moving region (a card, a
-status bar) the frames crossfade.
+only what moved: what is the same in both (a plane the camera follows, its route
+line, a card, a status bar) is copied from the nearer of the two untouched, and
+of the rest a pixel goes with the motion only where that explains the next
+picture better than standing still does. motion-smoothness fails a built frame
+that alters what stands still.
 
     retime-recording recording.mp4 even.mp4
     retime-recording recording.mp4 even.mp4 --from 32.5 --seconds 42 --fps 60
@@ -105,17 +106,23 @@ def sample(plane, x, y):
     return top * (1 - fy) + bottom * fy
 
 
-def between(a, b, f, fit, moving, scale):
+def between(a, b, f, fit, moving, scale, still):
     """The frame a fraction f of the way from picture a to picture b (Y, U, V planes).
 
-    Inside the moving region each pixel is either carried along the motion or
-    crossfaded where it stands, whichever explains b better: the ground is carried,
-    and a plane, its shadow and the route line under it, which the camera holds
-    nearly still, stay put. Dragging those with the ground is what ghosts them."""
+    What does not move from a to b (motion.still: a plane the camera follows, its
+    route line, the card) is the nearer picture's own pixels: a frame built between
+    two never alters what stands still. Inside the moving region every other pixel
+    is either carried along the motion or crossfaded where it stands, whichever
+    explains b better, and ground carried from under something still in one picture
+    is taken from the other alone. Dragging the still things with the ground, or the
+    ground over them, is what ghosts a wing's edge."""
     rows, cols = np.nonzero(moving.any(axis=1))[0], np.nonzero(moving.any(axis=0))[0]
+    height, width = still.shape
+    halved = still.reshape(height // 2, 2, width // 2, 2).all(axis=(1, 3))
     out, carry = [], None
-    for index, (pa, pb) in enumerate(zip(a, b)):
+    for index, (pa, pb, pn) in enumerate(zip(a, b, a if f < 0.5 else b)):
         sub = 1 if index == 0 else 2
+        held = still if sub == 1 else halved
         plane = pa.astype(np.float32) * (1 - f) + pb.astype(np.float32) * f
         if len(rows) and len(cols):
             box = (slice(rows[0] // sub, rows[-1] // sub + 1), slice(cols[0] // sub, cols[-1] // sub + 1))
@@ -124,15 +131,29 @@ def between(a, b, f, fit, moving, scale):
             k = scale / sub
             dx = k * fit[0] + fit[1] * x + fit[2] * y
             dy = k * fit[3] + fit[4] * x + fit[5] * y
-            warped = (1 - f) * sample(pa, x - f * dx, y - f * dy) + f * sample(pb, x + (1 - f) * dx, y + (1 - f) * dy)
+
+            def behind(xs, ys):
+                return held[np.clip(np.rint(ys).astype(int), 0, held.shape[0] - 1),
+                            np.clip(np.rint(xs).astype(int), 0, held.shape[1] - 1)]
+
+            weight_a = (1 - f) * ~behind(x - f * dx, y - f * dy)
+            weight_b = f * ~behind(x + (1 - f) * dx, y + (1 - f) * dy)
+            weights = weight_a + weight_b
+            warped = (weight_a * sample(pa, x - f * dx, y - f * dy) + weight_b * sample(pb, x + (1 - f) * dx, y + (1 - f) * dy)) \
+                / np.maximum(weights, 1e-6)
+            region = plane[box]
+            warped = np.where(weights > 0, warped, region)
             if carry is None:
                 # Judged on the light alone and shared with the colour, so they cannot disagree.
                 carried = np.abs(sample(pa, x - dx, y - dy) - pb[box])
                 stood = np.abs(pa[box].astype(np.float32) - pb[box])
-                carry = (carried <= stood) & moving[box]
+                # The edge of something still mixes it with the ground under it; carried,
+                # it would take the ground alone. It crossfades.
+                edge = motion.around(still, 1)[box] > 0
+                carry = (carried <= stood) & moving[box] & ~edge
             here = carry if sub == 1 else carry[::2, ::2][:warped.shape[0], :warped.shape[1]]
-            region = plane[box]
             region[here] = warped[here]
+        plane[held] = pn[held]
         out.append(np.clip(plane + 0.5, 0, 255).astype(np.uint8))
     return out
 
@@ -188,12 +209,13 @@ def main():
         if last is None:
             writer.stdin.write(raw)
         else:
+            still = motion.still(last[0], planes[0])
             for k in range(int(np.floor(slot)) + 1, int(np.floor(target["slot"])) + 1):
                 f = (k - slot) / (target["slot"] - slot)
                 if f > 0.98:
                     writer.stdin.write(raw)
                 else:
-                    for plane in between(last, planes, f, target["fit"], moving, scale):
+                    for plane in between(last, planes, f, target["fit"], moving, scale, still):
                         writer.stdin.write(plane.tobytes())
         last, slot = planes, target["slot"]
         target = next(wanted, None)

@@ -299,7 +299,8 @@ func run(_ tool: String, _ argv: [String]) -> String {
 let width = Int(number("--width", 1920))
 var encode = ["-y", "-framerate", "\(timeline.fps)", "-i", "\(dressed)/%05d.png"]
 if let audio = text("--audio") { encode += ["-i", audio] }
-encode += ["-c:v", "libx264", "-preset", "slow", "-crf", "20", "-pix_fmt", "yuv420p",
+// CRF 12, about 10 Mbps at 1080p: a feed compresses it again, and starts from a sharper copy.
+encode += ["-c:v", "libx264", "-preset", "slow", "-crf", "12", "-pix_fmt", "yuv420p",
            "-vf", "scale=\(width):-2"]
 if text("--audio") != nil {
     let gain = number("--gain-db", 0)

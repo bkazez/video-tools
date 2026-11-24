@@ -4,7 +4,7 @@ wrong; retime-recording turns such a recording back into an even pan.
 
     python3 tests/test_motion_smoothness.py
 
-The picture is random texture sliding down under a white bar held still, as a map
+The picture is random texture sliding down under a swept wing held still, as a map
 slides under a plane the camera follows.
 """
 import subprocess
@@ -33,24 +33,34 @@ ground = rng.integers(0, 256, (HEIGHT * 8, WIDTH), dtype=np.uint8)
 ground = ((ground.astype(float) + np.roll(ground, 1, 0) + np.roll(ground, 1, 1)) / 3).astype(np.uint8)
 
 
-def picture(position):
-    """The ground `position` pixels along, with the held-still bar over it."""
+rows, cols = np.mgrid[0:HEIGHT, 0:WIDTH]
+# Swept, so its edges cross the blocks the motion is measured on, as a plane's wings do.
+WING = (cols >= 100) & (cols < 380) & (rows >= 300 + 0.3 * (cols - 100)) & (rows < 316 + 0.3 * (cols - 100))
+EDGE = WING & ~np.roll(WING, -4, axis=0)
+
+
+def picture(position, smeared=False):
+    """The ground `position` pixels along, with the held-still wing over it: smeared,
+    the ground dragged a few pixels over the wing's trailing edge."""
     whole = int(position)
     part = position - whole
     a = ground[whole:whole + HEIGHT].astype(float)
     b = ground[whole + 1:whole + 1 + HEIGHT].astype(float)
     frame = (a * (1 - part) + b * part).astype(np.uint8)
-    frame[300:340, 200:280] = 255
+    # The light of a recorded picture flickers by a level or two from frame to frame.
+    frame[WING] = 230 + rng.integers(-1, 2, WING.sum())
+    if smeared:
+        frame[EDGE] = a[EDGE]
     return np.repeat(frame[:, :, None], 3, axis=2)
 
 
-def write(path, positions, stamps=None):
+def write(path, positions, stamps=None, smeared=()):
     """A video of the ground at these positions: evenly timed, or at the times the ffmpeg
     expression `stamps` gives frame N, on a 1/600 s clock as a simulator's recording is."""
     from PIL import Image
     folder = path.parent
     for index, position in enumerate(positions):
-        Image.fromarray(picture(position)).save(folder / f"frame{index:05d}.png")
+        Image.fromarray(picture(position, index in smeared)).save(folder / f"frame{index:05d}.png")
     timing = ["-vf", "setpts=(" + stamps.replace(",", "\\,") + ")/TB", "-fps_mode", "passthrough", "-enc_time_base", "1/600",
               "-video_track_timescale", "600"] if stamps else []
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-framerate", str(FPS), "-i", str(folder / "frame%05d.png"),
@@ -61,7 +71,9 @@ def write(path, positions, stamps=None):
 
 def judge(path):
     done = subprocess.run([sys.executable, str(CHECK), str(path)], capture_output=True, text=True)
-    return done.returncode, (done.stdout + done.stderr).strip().splitlines()[-1]
+    said = (done.stdout + done.stderr).strip().splitlines()
+    # A crash exits 1 as a fault does; it is neither verdict.
+    return (None if "Traceback" in done.stderr else done.returncode), said[-1]
 
 
 def main():
@@ -74,6 +86,12 @@ def main():
         write(even, [speed * n for n in range(frames)])
         code, said = judge(even)
         check("an even pan is smooth", code == 0, said)
+
+        # A frame built from the motion that drags the ground over the wing's edge.
+        smear = tmp / "smear.mp4"
+        write(smear, [speed * n for n in range(frames)], smeared={90})
+        code, said = judge(smear)
+        check("ground dragged over something still is a smear", code == 1 and "1 smears" in said, said)
 
         # The simulator: holds a picture for 5 frames, then jumps to where it should be.
         stall = tmp / "stall.mp4"

@@ -45,16 +45,12 @@ os.environ.setdefault(
     "RESOLVE_SCRIPT_LIB",
     "/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/Libraries/"
     "Fusion/fusionscript.so")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "lib"))
+import resolve_up  # noqa: E402
 
 
 def connect():
-    try:
-        import DaVinciResolveScript as dvr
-    except ImportError:
-        sys.exit("resolve-refresh-media: Resolve's scripting module is not on the path")
-    resolve = dvr.scriptapp("Resolve")
-    if not resolve:
-        sys.exit("resolve-refresh-media: Resolve is not running")
+    resolve = resolve_up.ready()
     project = resolve.GetProjectManager().GetCurrentProject()
     if not project:
         sys.exit("resolve-refresh-media: no project is open")

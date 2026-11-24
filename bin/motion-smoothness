@@ -16,6 +16,10 @@ easing in or out follows and a stall does not:
   freeze   a step under FREEZE x its neighbours', between moving frames
   jump     a step over JUMP x its neighbours'
   cadence  the steps' spread, median |step / neighbours' - 1|, over CADENCE
+  smear    over SMEAR_AREA pixels that stand still in the frames either side
+           (motion.held: a plane the camera follows, a card) but are over SMEAR
+           grey levels off in the frame between them, as where a frame built
+           from the motion drags the ground over a wing's edge
 
 A picture that is not moving, or barely, is not judged: a still is not a stall.
 Nor is a cut, where nothing in one frame has a counterpart in the next. Exit 1
@@ -37,6 +41,9 @@ JUMP = 1.6
 CADENCE = 0.1
 NEAR = 0.05              # seconds either side that are a step's neighbours
 STILL = 0.1              # a local median under this many analysis pixels a frame is a still
+SMEAR = 24               # grey levels a still pixel may be off in the frame between
+SMEAR_AREA = 16          # analysis pixels that many off before the frame is smeared
+REACH = 3                # frames either side a smear is judged against
 
 
 def measure(path, loop):
@@ -50,11 +57,13 @@ def measure(path, loop):
     corners = motion.moving_blocks(motion.spread(path, width, height))
     count = max(len(times) - 1 + loop, 0)
     fps = 1 / typical
-    if not corners:
-        return np.zeros(count), np.ones(count, bool), times, fps
     steps, same, first, before = [], [], None, None
+    smears = Smears()
     for frame, keep in zip(motion.frames(path, width, height), seen):
         if not keep:
+            continue
+        smears.add(frame)
+        if not corners:
             continue
         frame = motion.spectra(frame, corners)
         if before is None:
@@ -64,6 +73,9 @@ def measure(path, loop):
             steps.append(moved)
             same.append(kept)
         before = frame
+    smears = smears.finish(loop)
+    if not corners:
+        return np.zeros(count), np.ones(count, bool), times, fps, smears
     if loop:
         moved, kept = motion.step(before, first)
         steps.append(moved)
@@ -73,7 +85,47 @@ def measure(path, loop):
     if len(gaps) == len(steps) and len(gaps) and np.ptp(gaps) > 1e-3:
         # A recording's frames are not evenly spaced; judge speed, not step.
         steps = steps * typical / np.maximum(gaps, 1e-4)
-    return steps, same, times, fps
+    return steps, same, times, fps, smears
+
+
+class Smears:
+    """Each frame against the frames up to REACH either side of it: a pixel inside
+    something that is the same in the frame k before and the frame k after
+    (motion.held) must be the same in this one. Several k, because a frame built
+    between two drawn ones has built neighbours, and they can be smeared where it is."""
+
+    def __init__(self):
+        self.window, self.opening, self.found = [], [], []
+
+    def add(self, frame):
+        if len(self.opening) < 2 * REACH:
+            self.opening.append(frame)
+        self.window = self.window[-2 * REACH:] + [frame]
+        if len(self.window) > REACH:
+            self.found.append(self.judge(len(self.window) - 1 - REACH))
+
+    def judge(self, centre):
+        """How many still pixels are over SMEAR off, and the worst, at the worst k."""
+        worst = (0, 0.0)
+        for k in range(1, min(REACH, centre, len(self.window) - 1 - centre) + 1):
+            before, after = self.window[centre - k], self.window[centre + k]
+            off = np.abs(self.window[centre] - (before + after) / 2)[motion.held(before, after)]
+            worst = max(worst, (int((off > SMEAR).sum()), float(off.max()) if off.size else 0.0))
+        return worst
+
+    def finish(self, loop):
+        """Every frame's smear, in order."""
+        count = len(self.found) + min(REACH, len(self.window))
+        if loop and count >= 2 * REACH:
+            # Round the seam: the last frames judged against the first, then the first
+            # against the last, in place of their judgement with one side missing.
+            for frame in self.opening:
+                self.add(frame)
+            self.found[:REACH] = self.found[count:count + REACH]
+        else:
+            for centre in range(len(self.window) - (count - len(self.found)), len(self.window)):
+                self.found.append(self.judge(centre))
+        return self.found[:count]
 
 
 def judge(steps, same, fps):
@@ -100,23 +152,29 @@ def main():
     parser.add_argument("--worst", type=int, default=8, help="how many faults to print")
     args = parser.parse_args()
 
-    steps, same, times, fps = measure(args.video, args.loop)
+    steps, same, times, fps, smears = measure(args.video, args.loop)
     local, ratio, judged, faults, spread = judge(steps, same, fps)
     freezes = sum(1 for kind, _ in faults if kind == "freeze")
     jumps = len(faults) - freezes
+    smeared = [i for i, (pixels, _) in enumerate(smears) if pixels > SMEAR_AREA]
     cuts = int((~same).sum())
     if args.json:
         print(json.dumps({"fps": fps, "steps": steps.round(3).tolist(), "ratio": ratio.round(3).tolist(),
-                          "judged": judged.tolist(), "spread": spread, "freezes": freezes, "jumps": jumps}))
+                          "judged": judged.tolist(), "spread": spread, "freezes": freezes, "jumps": jumps,
+                          "smeared": [pixels for pixels, _ in smears]}))
     summary = (f"{args.video}: {len(steps)} steps, {int(judged.sum())} moving, {cuts} cuts; median step "
                f"{np.median(steps[judged]) if judged.any() else 0:.2f} px; spread {spread:.3f} "
-               f"(limit {CADENCE}); {freezes} freezes, {jumps} jumps")
+               f"(limit {CADENCE}); {freezes} freezes, {jumps} jumps; {len(smeared)} smears, "
+               f"worst {max((p for p, _ in smears), default=0)} px")
     worst = sorted(faults, key=lambda f: -abs(np.log(max(ratio[f[1]], 1e-3))))[:args.worst]
     for kind, i in sorted(worst, key=lambda f: f[1]):
         when = times[i + 1] if i + 1 < len(times) else len(steps) / fps
         print(f"  {kind} into frame {i + 1} ({when:.2f} s): step {steps[i]:.2f} px, "
               f"{ratio[i]:.2f}x the {local[i]:.2f} px around it", file=sys.stderr)
-    if faults or spread > CADENCE:
+    for i in sorted(smeared, key=lambda i: -smears[i][0])[:args.worst]:
+        print(f"  smear in frame {i} ({times[i]:.2f} s): {smears[i][0]} still pixels off by over {SMEAR}, "
+              f"worst {smears[i][1]:.0f}", file=sys.stderr)
+    if faults or smeared or spread > CADENCE:
         print("motion-smoothness: JERKY " + summary, file=sys.stderr)
         sys.exit(1)
     print("motion-smoothness: smooth " + summary, file=sys.stderr if args.json else sys.stdout)

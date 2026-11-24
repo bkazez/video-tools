@@ -83,21 +83,12 @@ beside a horizontal one in the same project:
 """
 import argparse, glob, os, sys
 import yaml
-
-MODULES = "/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting/Modules/"
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "lib"))
+import resolve_up  # noqa: E402
 
 
 def connect():
-    sys.path.append(MODULES)
-    try:
-        import DaVinciResolveScript as dvr
-    except ImportError:
-        sys.exit("cannot import DaVinciResolveScript -- is Resolve installed?")
-    r = dvr.scriptapp("Resolve")
-    if r is None:
-        sys.exit("Resolve is not answering. Start it, and set Preferences > System > "
-                 "General > 'External scripting using' to Local.")
-    return r
+    return resolve_up.ready()
 
 
 def find_bin(mp, name):

@@ -34,13 +34,8 @@ def die(message):
 
 
 def connect():
-    try:
-        import DaVinciResolveScript as dvr
-    except ImportError:
-        die("Resolve's scripting module is not on the path")
-    resolve = dvr.scriptapp("Resolve")
-    if not resolve:
-        die("Resolve is not running (open it, and set External scripting to Local)")
+    import resolve_up
+    resolve = resolve_up.ready()
     project = resolve.GetProjectManager().GetCurrentProject()
     if not project:
         die("no project is open")

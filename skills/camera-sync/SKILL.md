@@ -109,7 +109,7 @@ lands within a few seconds and can be ten seconds out while looking like a solid
 lock: several agreeing pairs, a spread of a second or two, individual roll-starts
 landing within a second of a take start. An operator does not press record at a
 repeatable moment relative to the downbeat, so the cluster is genuinely wide and
-its centre is not the answer. Its accuracy is also floored by the coarser clock —
+its center is not the answer. Its accuracy is also floored by the coarser clock —
 an acquisition clock ticking in whole seconds cannot do better than about a
 second.
 
@@ -172,7 +172,7 @@ Never ship on the numbers. The check that settles it costs a minute:
 3. Pull the frame at each and look: mouth open on the sung moments, shut on the
    rests.
 4. For frame precision, find the sharpest onset out of silence and step ±5 frames
-   through it. The mouth should begin opening at the centre.
+   through it. The mouth should begin opening at the center.
 
 A one-second error is glaring under this and invisible under any amount of
 arithmetic. It is also sharp enough to choose between two candidate offsets
@@ -198,7 +198,7 @@ before the bug was found.
     ffmpeg -i CLIP.MP4 -ac 1 -ar 8000 whole.wav                  # decode once, slice in the analysis
 
 Decode the whole track once and take windows out of the array. A 20-minute clip
-is 10 MB at 8 kHz mono, so there is nothing to optimise here. `-ss` *after* `-i`
+is 10 MB at 8 kHz mono, so there is nothing to optimize here. `-ss` *after* `-i`
 is accurate but decodes from the start anyway, which is the same cost with a way
 to get it wrong.
 

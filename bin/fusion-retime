@@ -32,6 +32,8 @@ import numpy as np
 
 sys.path.append("/Library/Application Support/Blackmagic Design/DaVinci Resolve/"
                 "Developer/Scripting/Modules")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "lib"))
+import resolve_up  # noqa: E402
 
 COMP = """Composition {
 \tCurrentTime = 0,
@@ -81,14 +83,7 @@ COMP = """Composition {
 
 
 def connect():
-    try:
-        import DaVinciResolveScript as dvr
-    except ImportError:
-        sys.exit("fusion-retime: Resolve's scripting module is not on the path")
-    r = dvr.scriptapp("Resolve")
-    if not r:
-        sys.exit("fusion-retime: Resolve is not running")
-    return r
+    return resolve_up.ready()
 
 
 def at(reference, query, t):

@@ -1,6 +1,6 @@
 ---
 name: colour-grading
-description: Load BEFORE grading footage — building a look, fixing a dark or flat picture, deciding a tone curve, judging whether a grade is working, or correcting a colour cast. Also load when a task mentions log footage looking flat, lifted blacks, crushed shadows, grain or noise appearing after a grade, skin tones, white balance, a white that is not white, a LUT, or applying a grade across a whole project.
+description: Load BEFORE grading footage — building a look, fixing a dark or flat picture, deciding a tone curve, judging whether a grade is working, or correcting a color cast. Also load when a task mentions log footage looking flat, lifted blacks, crushed shadows, grain or noise appearing after a grade, skin tones, white balance, a white that is not white, a LUT, or applying a grade across a whole project.
 ---
 
 # Grading from measurements, not from taste alone
@@ -46,7 +46,7 @@ anyone who has been staring at the uncorrected one. So measure the brightest
 near-neutral patch in the frame — a white shirt, a lit page, plaster — and read its
 R:G:B. The per-channel gain that lands it at R = G = B is the correction, and
 because a constant multiply in a gamma-encoded space is a constant multiply in
-linear light, it neutralises at every level, not just at the patch.
+linear light, it neutralizes at every level, not just at the patch.
 
 **Then check it against skin before you believe it.** A white-patch reading is only
 as good as the patch: tighten the framing and the brightest neutral thing changes
@@ -58,7 +58,7 @@ of clips needs its own number. On one session the patch said the two pieces were
 4-5% apart and skin confirmed it at +4.8% R/G and -8.5% B/G — different light, two
 trims, and after them the skin gap closed to within the take-to-take scatter.
 
-**A white balance is a look decision as much as a correction.** Neutralising the
+**A white balance is a look decision as much as a correction.** Neutralizing the
 illuminant also cools everything that was warm because the light was warm. Leaving
 1-2% of the original bias is usually right in a warm room: the white reads white
 and the stone still reads warm.
@@ -100,11 +100,11 @@ chart in the shot.
 
 White balance first as a per-channel gain, then one monotone curve on all three
 channels, then saturation about luma. The tool prints the slope table and what the
-grade does to each measured colour you pass as a `--probe`, which is the whole
+grade does to each measured color you pass as a `--probe`, which is the whole
 argument for the control points you chose.
 
 **Control points are channel values, not luma values.** This is the mistake to
-avoid: a point of `90:158` does not put a colour whose *luma* is 90 at 158. For
+avoid: a point of `90:158` does not put a color whose *luma* is 90 at 158. For
 saturated skin — R 98, G 56, B 41 — luma is dominated by green at 0.7152, so what
 sets skin's brightness is where the curve takes **56**, and its red channel rides
 the curve somewhere else entirely. A first pass designed in luma terms landed skin
@@ -191,7 +191,7 @@ proportion. There is no control-point arrangement that escapes this.
 When that is the limit, the answer is not a better curve:
 
 - **Noise reduction first, then lift.** This is the real unlock for a high-ISO
-  interior, and it should come BEFORE the curve is finalised, not after — a grade
+  interior, and it should come BEFORE the curve is finalized, not after — a grade
   designed around ugly grain is a grade held back by it.
 - **A qualifier or mask** to lift the subject without the background.
 
@@ -265,7 +265,7 @@ how far to trust those numbers:
   to within two code values in all three angles, the picture still read as
   three different rooms: each frame's surround differs (one shot is mostly
   black coat, another is wall-to-wall lit case), the eye adapts to the
-  surround, and identical patch values read as different colours. The finished
+  surround, and identical patch values read as different colors. The finished
   match carried a deliberate 10-level spread on the very anchor that had been
   "matched", set by eye. Converge the meter into a family, then finish at
   thumbnail size.
@@ -276,15 +276,15 @@ how far to trust those numbers:
   only trustworthy from fixed-coordinate patches (a hand-picked skin box) or
   from the eye.
 
-**Translate colour feedback into axes before touching anything.** Each row is
+**Translate color feedback into axes before touching anything.** Each row is
 a real note from that shoot and the fix that measured right:
 
 | the note | the axis, and the fix |
 |---|---|
 | "yellow, no reds" in skin | blue starvation. Hue angle 60(G-B)/(R-B): red-orange skin sits near 11 deg, yellow at 18+. Desaturation can NEVER fix a yellow cast -- it cannot add blue -- so raise B toward the reference B/R, capped |
 | "no blues in it at all" | count lit pixels with B > R against a neutral angle AND the ungraded source. The source usually has the blue (8-10% there against 2.7% delivered) and the grade's warm slope killed it; give it back only to pixels already relatively cool, so the approved warm subjects hold |
-| "a bit green" | G against BOTH neighbours. A warm correction that moves only R and B leaves the green exactly where it was; trim G itself |
-| "dismal, too dark" right after a desaturation | luma is unchanged -- the colourfulness was propping up apparent brightness (Helmholtz-Kohlrausch). The fix is a midtone lift, not more colour |
+| "a bit green" | G against BOTH neighbors. A warm correction that moves only R and B leaves the green exactly where it was; trim G itself |
+| "dismal, too dark" right after a desaturation | luma is unchanged -- the colourfulness was propping up apparent brightness (Helmholtz-Kohlrausch). The fix is a midtone lift, not more color |
 
 **Two stages that each fixed a defect can stack into a new one.** A warm-pixel
 desaturation tuned when it ran alone, plus a lift whose top compression also
@@ -325,7 +325,7 @@ secondaries) offline and apply one .cube per camera.
 ## Correcting a whole angle without touching the grades already on it
 
 When the clip grades are approved and only one thing is wrong across the angle,
-the correction goes AFTER them, once, in a **colour group's post-clip graph**:
+the correction goes AFTER them, once, in a **color group's post-clip graph**:
 
     cg = project.AddColorGroup("voice")        # on the PROJECT, not the timeline
     for it in items: it.AssignToColorGroup(cg)

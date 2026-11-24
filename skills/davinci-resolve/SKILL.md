@@ -1,6 +1,6 @@
 ---
 name: davinci-resolve
-description: Load BEFORE driving DaVinci Resolve from outside it — creating a project, importing media into bins, setting clip attributes or colour management, building a timeline by script, or MOVING clips on one (inserting or removing time, rippling an edit, conforming picture to a soundtrack that changed length). Also load when a task mentions the Resolve scripting API, DaVinciResolveScript, colour management, input colour space, data levels, log footage in Resolve, optimized media, a clip that plays at the wrong speed or length, a .drt or DRT export, a round trip that lost grades, or an edit the API seems unable to make.
+description: Load BEFORE driving DaVinci Resolve from outside it — creating a project, importing media into bins, setting clip attributes or color management, building a timeline by script, or MOVING clips on one (inserting or removing time, rippling an edit, conforming picture to a soundtrack that changed length). Also load when a task mentions the Resolve scripting API, DaVinciResolveScript, color management, input color space, data levels, log footage in Resolve, optimized media, a clip that plays at the wrong speed or length, a .drt or DRT export, a round trip that lost grades, or an edit the API seems unable to make.
 ---
 
 # Driving DaVinci Resolve from outside
@@ -32,7 +32,7 @@ directly:
 and reads back as the old value with no error.
 
 The one that bites: with **`isAutoColorManage` = 1**, Resolve derives the output
-colour space and refuses to set it. `colorSpaceOutput` then keeps reporting
+color space and refuses to set it. `colorSpaceOutput` then keeps reporting
 something you did not choose (`Rec.709 (Scene)`) while `colorSpaceTimeline`
 accepts your value perfectly — so the project looks configured and is not. Set
 `isAutoColorManage` to `0` **first**, then the three spaces:
@@ -235,7 +235,7 @@ change the thing that produced it and re-render. Do not patch the render, and do
 not build a second folder of corrected copies beside the first.
 
 The temptation is real because patching is quick: a set of renders that come out
-quiet can be normalised in minutes, whereas raising them properly means finding
+quiet can be normalized in minutes, whereas raising them properly means finding
 the limiter in the mixing project and re-rendering. But the patched files are
 orphans. The next render out of the mixing project overwrites nothing and fixes
 nothing, the NLE goes on pointing at the copies, and now two folders disagree
@@ -245,7 +245,7 @@ Concretely, for the cases that keep coming up:
 
 | Problem | Wrong | Right |
 |---|---|---|
-| Renders too quiet for delivery | normalise the files, point the NLE at the copies | set the gain in the mastering chain (the limiter's threshold) and re-render |
+| Renders too quiet for delivery | normalize the files, point the NLE at the copies | set the gain in the mastering chain (the limiter's threshold) and re-render |
 | A take's render stops mid-phrase | trim or crossfade in the NLE | move the region boundary in the mixing project |
 | A render is named badly | rename the file | rename the region; the render pattern does the rest |
 | Two competing render folders | keep both | one folder, named by the project's own convention |
@@ -256,7 +256,7 @@ second folder of "normalised" or "fixed" or "final" versions is a bug: it will
 drift, and the version the NLE is using stops being knowable at a glance.
 
 **Delivery loudness is a mastering setting, not a post-process.** Streaming
-platforms normalise to about -14 LUFS and only ever turn loud material DOWN, so
+platforms normalize to about -14 LUFS and only ever turn loud material DOWN, so
 anything delivered quieter simply plays quiet. Get there by lowering the master
 limiter's threshold and measuring the result, then verify the limiter is not
 paying for it: compare the loudness range before and after, and measure gain
@@ -275,7 +275,7 @@ after — a relink that moves an edit has destroyed hand-alignment work.
 Use it rather than driving the render API by hand. A Resolve delivery preset is
 a *picture* preset: "H.265 Master" and "ProRes Master" both arrive with **320
 kbps AAC** on the audio, and neither the UI nor the API mentions it. On a hall
-recording that residual sits **26.4 dB under the programme** — a reverb tail is
+recording that residual sits **26.4 dB under the program** — a reverb tail is
 the last thing a perceptual codec spends bits on — so a mix that took a week
 ships through a codec meant for speech. Delivered that way once on the
 2024-05-21 Laurens Leuven vertical; the PCM re-render measured **207–219 dB**
@@ -313,7 +313,7 @@ load by name and save with `SaveProject()` rather than closing his.
 
 `bin/build-resolve-project spec.yaml` does all of the above from a spec, and
 `--dry-run` expands the globs and lists what it would build without touching
-Resolve. A worked spec, with the colour settings for a two-camera S-Log3 and
+Resolve. A worked spec, with the color settings for a two-camera S-Log3 and
 Rec.709 shoot, is
 `~/Documents/Music/Recordings/2026-04-07 Brahms Faure/resolve-project.yaml`.
 
@@ -332,7 +332,7 @@ references, new audio. Run it after any re-render, then save in Resolve.
 
 `--prune-missing` also clears media pool items whose file has gone — but never
 one a timeline still uses, since deleting that would edit the timeline. Those are
-reported and left. A file being absent is not on its own a licence to change
+reported and left. A file being absent is not on its own a license to change
 somebody's edit; delete the timeline first, then prune.
 
 ## Audio that clicks on playback is the Color page, not your audio
@@ -382,4 +382,4 @@ new parent process sends keystrokes via System Events, macOS puts up *"bash" wou
 like to access data from other apps* over Resolve and waits. Every keystroke until
 it is answered goes nowhere, and a capture taken during that window is silent — a
 silent capture is therefore never evidence of clean playback. Check for signal, and
-if there is none, screenshot the screen before theorising.
+if there is none, screenshot the screen before theorizing.

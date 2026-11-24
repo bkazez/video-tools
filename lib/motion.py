@@ -16,6 +16,8 @@ WIDTH = 1080             # analysis width
 BLOCK = 64               # block side, analysis pixels
 CHANGING = 4.0           # a pixel whose grey varies this much over the video is moving
 PEAK = 0.15              # a correlation peak under this has no counterpart: a cut, not a move
+SAME = 3.0               # grey levels a pixel may drift and still be the same pixel
+PATCH = 2                # a still pixel is in a still patch this many pixels each way
 _WINDOW = np.outer(np.hanning(BLOCK), np.hanning(BLOCK)).astype(np.float32)
 
 
@@ -77,6 +79,31 @@ def moving_blocks(spread):
     return [(y, x) for y in range(0, moving.shape[0] - BLOCK + 1, half)
             for x in range(0, moving.shape[1] - BLOCK + 1, half)
             if moving[y:y + BLOCK, x:x + BLOCK].mean() > 0.9]
+
+
+def around(mask, reach):
+    """How many of the (2 reach + 1)-square around each pixel are set."""
+    side = 2 * reach + 1
+    table = np.zeros((mask.shape[0] + side, mask.shape[1] + side), np.int32)
+    table[reach + 1:reach + 1 + mask.shape[0], reach + 1:reach + 1 + mask.shape[1]] = mask
+    table = table.cumsum(0).cumsum(1)
+    return table[side:, side:] - table[:-side, side:] - table[side:, :-side] + table[:-side, :-side]
+
+
+def held(a, b):
+    """The pixels that are the same in pictures a and b, and so is every pixel within
+    PATCH of them: the inside of something still, away from its edges. Moving ground
+    hardly ever matches over a whole patch by chance."""
+    same = np.abs(a.astype(np.float32) - b) <= SAME
+    return around(same, PATCH) == (2 * PATCH + 1) ** 2
+
+
+def still(a, b):
+    """The pixels that do not move from picture a to picture b: a plane the camera
+    follows, a card, a status bar, out to their edges. A pixel of moving ground
+    that matches by chance is not still."""
+    same = np.abs(a.astype(np.float32) - b) <= SAME
+    return same & (around(held(a, b), PATCH) > 0)
 
 
 def spectra(frame, corners):

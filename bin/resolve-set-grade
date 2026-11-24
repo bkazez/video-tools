@@ -41,18 +41,14 @@ os.environ.setdefault(
     "RESOLVE_SCRIPT_LIB",
     "/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/Libraries/"
     "Fusion/fusionscript.so")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "lib"))
+import resolve_up  # noqa: E402
 
 LUT_LIBRARY = ("/Library/Application Support/Blackmagic Design/DaVinci Resolve/LUT")
 
 
 def connect():
-    try:
-        import DaVinciResolveScript as dvr
-    except ImportError:
-        sys.exit("resolve-set-grade: Resolve's scripting module is not on the path")
-    resolve = dvr.scriptapp("Resolve")
-    if not resolve:
-        sys.exit("resolve-set-grade: Resolve is not running")
+    resolve = resolve_up.ready()
     project = resolve.GetProjectManager().GetCurrentProject()
     if not project:
         sys.exit("resolve-set-grade: no project is open")

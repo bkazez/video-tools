@@ -20,6 +20,7 @@ Everything takes paths as arguments; nothing is specific to one session.
 | `bin/frame-balance` | whether the white in the shot is white, and the per-channel gain that would make it so |
 | `bin/build-grade-lut` | a grade as a .cube from control points: white balance, a monotone tone curve, saturation — and the slope table that says what it costs in grain |
 | `bin/resolve-set-grade` | that grade applied — a LUT and/or an ASC CDL on node 1 of selected timelines |
+| `bin/resolve-up` | Resolve started or freed until a script can drive it: the update modal turned off, a Resolve blocked by a dialog saved, quit and restarted; plug-ins that hang Resolve's scanner are switched off and freed by `arc plugin doctor --fix` / `--rescue`. Every `resolve-*` tool runs it first |
 | `bin/resolve-audio-check` | whether Resolve's playback is clicking, per page — it is the Color page, and it is 256 samples of digital zero |
 | `bin/resolve-conform` | every video timeline put back in sync with an arc mix that has been re-comped, working out from arc's own document what moved and by how much |
 | `bin/resolve-ripple` | time inserted or taken out at a point you name, when there is no arc document to read — the manual half of the same machinery |
@@ -110,7 +111,7 @@ row, so a still and a frame of the film cannot disagree about where the glass is
 
 ### No film leaves jerky
 
-    bin/motion-smoothness film.mp4               # exit 1 on a freeze, a jump or an uneven cadence
+    bin/motion-smoothness film.mp4               # exit 1 on a freeze, a jump, an uneven cadence or a smear
     bin/motion-smoothness --loop loop.mp4        # and the last frame into the first
     bin/retime-recording recording.mp4 even.mp4 --from 32.5 --seconds 42 --fps 60
 
@@ -124,7 +125,11 @@ kept at 50, and every few seconds a stretch the simulator drew at 20 Hz).
 
 `retime-recording` is the fix for a simulator's screen recording: each picture it
 drew once, as many frames at `--fps` as the picture moved, and the frames it did
-not draw built from the two either side, moving only what moved.
+not draw built from the two either side, moving only what moved. What is the same
+in the two (a plane the camera follows, a card) is copied untouched from the nearer
+one. `motion-smoothness` fails a smear: a frame that alters pixels the frames up to
+three either side agree on. The old retime of FlightTrack's Follow Mode dragged the
+ground over the wing's trailing edge in 177 of the 9:16 video's 1728 frames.
 `tests/test_motion_smoothness.py` proves both directions on a synthetic pan.
 
 ## Conforming picture to a mix that changed length
