@@ -7,6 +7,7 @@ wrong; retime-recording turns such a recording back into an even pan.
 The picture is random texture sliding down under a white bar held still, as a map
 slides under a plane the camera follows.
 """
+import json
 import subprocess
 import sys
 import tempfile
@@ -61,6 +62,17 @@ def write(path, positions, stamps=None, still=None):
                     *timing, "-c:v", "libx264", "-qp", "0", "-pix_fmt", "yuv420p", str(path)], check=True)
     for png in folder.glob("frame*.png"):
         png.unlink()
+
+
+def holds_in(path, positions, fps):
+    """The holds motion-smoothness --json finds in a video of POSITIONS at FPS."""
+    global FPS
+    kept, FPS = FPS, fps
+    write(path, positions)
+    FPS = kept
+    found = json.loads(subprocess.run([sys.executable, str(CHECK), "--json", str(path)],
+                                      capture_output=True, text=True).stdout)["faults"]
+    return [f for f in found if f["kind"] == "hold"]
 
 
 def judge(path):
@@ -119,6 +131,10 @@ def main():
         write(stall, positions)
         code, said = judge(stall)
         check("a stall and a catch-up are jerky", code == 1 and "freeze" in said and "jump" in said, said)
+        listed = json.loads(subprocess.run([sys.executable, str(CHECK), "--json", str(stall)],
+                                           capture_output=True, text=True).stdout)["faults"]
+        check("--json lists each fault at its time, inside the stall", listed and
+              all(1.0 <= f["at"] <= 2.05 for f in listed), str(listed))
         shots = tmp / "shots"
         done = subprocess.run([sys.executable, str(CHECK), "--frames", str(shots), str(stall)], capture_output=True, text=True)
         printed = [line for line in done.stderr.splitlines() if " into frame " in line]
@@ -140,6 +156,18 @@ def main():
         write(drift, [0.2 * (n + n // 5) for n in range(frames)])
         code, said = judge(drift)
         check("a drift too slow to see judder is not judged", code == 0, said)
+
+        # A phone's recording of an iOS spring: 30 frames a second, the card sliding up on a
+        # critically damped curve. Its steps shrink fast, so they say nothing about stalls,
+        # but a held frame in the middle of it does.
+        def spring(n):
+            return 400 * (1 - (1 + n / 4) * np.exp(-n / 4))
+        rested = [0.0] * 15 + [spring(n) for n in range(24)] + [spring(24)] * 15
+        check("a spring recorded at 30 fps has no holds", holds_in(tmp / "spring.mp4", rested, 30) == [], "")
+        stalled = rested[:20] + [rested[20]] * 3 + rested[23:]
+        found = holds_in(tmp / "stalled.mp4", stalled, 30)
+        check("one held mid-spring for two frames is a hold, at its time",
+              len(found) == 1 and found[0]["frames"] == 2 and abs(found[0]["at"] - 21 / 30) < 0.02, str(found))
 
         # A recording: each picture once on time with a copy 2 ms after it, and for the
         # middle second a picture every 50 ms (pictures 60, 63, ... 117).

@@ -38,7 +38,7 @@ on any fault, with the worst frames and their times.
 
     motion-smoothness film.mp4
     motion-smoothness --loop loop.mp4          # the last frame into the first, too
-    motion-smoothness --json film.mp4          # every step, for a plot
+    motion-smoothness --json film.mp4          # every step, for a plot, and every fault with its time
     motion-smoothness --skip 7.0-7.75 --skip 9.0-9.5 film.mp4
     motion-smoothness --frames out/ film.mp4   # each fault printed, as a picture: the frame
                                                # before it beside the frame after, so one look
@@ -62,16 +62,21 @@ HELD = 0.03              # mean grey levels a frame differs from the last by, at
 CHANGED = 0.1            # mean grey levels a frame differs from the last by, at least, to change
 AROUND = 0.2             # seconds either side of a held frame
 BUSY = 0.4               # share of those frames that change, both sides, for a hold to be a stall
+UNSEEN = 0.004           # seconds on screen under which a frame is a recorder's copy, not a picture
 ALIKE = 3.0              # at most this ratio between the changes just before a hold and just after
 
 
 def shown(times):
-    """Which frames a player shows, and the frame time: a frame on screen for under half
-    a frame's time (a recording's copy of the picture 2 ms after it) is not seen, so its
-    successor stands for it."""
-    lasts = np.diff(times, append=times[-1] + np.median(np.diff(times))) if len(times) > 1 else np.ones(len(times))
-    typical = np.median(lasts[lasts > 0]) if (lasts > 0).any() else 1 / 30
-    return lasts >= typical / 2, typical
+    """Which frames a player shows, and the frame time: a frame on screen for under 4 ms
+    (a recording's copy of the picture 2 ms after it) is shorter than any display's frame
+    and is not seen, so its successor stands for it."""
+    if len(times) < 2:
+        return np.ones(len(times), bool), 1 / 30
+    lasts = np.diff(times, append=times[-1] + np.median(np.diff(times)))
+    seen = lasts >= UNSEEN
+    gaps = np.diff(times[seen])
+    typical = np.median(gaps[gaps > 0]) if (gaps > 0).any() else 1 / 30
+    return seen, typical
 
 
 def blocks(a, b):
@@ -112,9 +117,15 @@ def measure(path, loop):
 
 
 def holds(path, fps):
-    """Each held frame inside changing pictures: (index of the step, run length)."""
+    """Each run of held frames inside changing pictures: (index of the step after which the
+    picture held, run length in frames).
+
+    A recording made at a fixed rate stores a held picture as a repeated frame. A phone's or a
+    simulator's stores a frame only when the screen changes, so there the hold is the time
+    between two frames: a gap of N frame times is N - 1 held frames. Both are judged alike."""
     width, height, times = motion.probe(path)
-    seen, _ = shown(times)
+    seen, typical = shown(times)
+    stamps = times[seen]
     change, before = [], None
     for frame, keep in zip(motion.frames(path, width, height), seen):
         if not keep:
@@ -123,20 +134,19 @@ def holds(path, fps):
         if before is not None:
             change.append(float(np.abs(frame - before).mean()))
         before = frame
-    change = np.array(change)
+    gaps = np.diff(stamps)[:len(change)]
+    expanded, origin = [], []
+    for i, moved in enumerate(change):
+        late = max(0, int(round(gaps[i] / typical)) - 1) if i < len(gaps) else 0
+        expanded += [0.0] * late + [moved]
+        origin += [i] * (late + 1)
+    change = np.array(expanded)
     near = max(2, int(round(AROUND * fps)))
+    longest = max(1, int(round(REST * fps)))
     held = change < HELD
     changing = change > CHANGED
     def busy(span):
         return len(span) > 0 and span.mean() >= BUSY
-    stalls = [i for i in np.flatnonzero(held)
-              if busy(changing[max(0, i - near):i]) and busy(changing[i + 1:i + 1 + near])]
-    runs = []
-    for i in stalls:
-        if runs and i == runs[-1][0] + runs[-1][1]:
-            runs[-1] = (runs[-1][0], runs[-1][1] + 1)
-        else:
-            runs.append((i, 1))
     # One motion stalling changes the picture alike just before the hold and just after;
     # a title that has landed and the next one knocking in do not.
     def alike(i, run):
@@ -144,7 +154,10 @@ def holds(path, fps):
             return False
         before, after = change[i - 1], change[i + run]
         return min(before, after) > CHANGED and max(before, after) <= ALIKE * min(before, after)
-    return [(i, run) for i, run in runs if alike(i, run)]
+    edges = np.flatnonzero(np.diff(np.r_[0, held.astype(int), 0]))
+    return [(int(origin[start]), int(end - start)) for start, end in zip(edges[::2], edges[1::2])
+            if end - start <= longest and busy(changing[max(0, start - near):start])
+            and busy(changing[end:end + near]) and alike(start, end - start)]
 
 
 def beside_rest(moves, reach, fps):
@@ -192,7 +205,8 @@ def judge(steps, same, fps, skip=(), times=None):
 
 def picture(video, before, after, out):
     """The frame shown at BEFORE beside the one shown at AFTER, half size, in OUT."""
-    subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", f"{before:.4f}", "-i", video, "-ss", f"{after:.4f}", "-i", video,
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-seek_timestamp", "1", "-ss", f"{before:.4f}", "-i", video,
+                    "-seek_timestamp", "1", "-ss", f"{after:.4f}", "-i", video,
                     "-filter_complex", "[0:v]scale=iw/2:-2[a];[1:v]scale=iw/2:-2[b];[a][b]hstack",
                     "-frames:v", "1", out], check=True)
 
@@ -215,9 +229,14 @@ def main():
     jumps = len(faults) - freezes
     stalls = holds(args.video, fps)
     cuts = int((~same).sum())
+    def shown_at(i):
+        return float(times[i + 1]) if i + 1 < len(times) else len(steps) / fps
     if args.json:
+        listed = [{"kind": kind, "at": round(shown_at(i), 3), "ratio": round(float(ratio[i]), 3)} for kind, i in faults] + \
+                 [{"kind": "hold", "at": round(shown_at(i), 3), "frames": run} for i, run in stalls]
         print(json.dumps({"fps": fps, "steps": steps.round(3).tolist(), "ratio": ratio.round(3).tolist(),
-                          "judged": judged.tolist(), "spread": spread, "freezes": freezes, "jumps": jumps}))
+                          "judged": judged.tolist(), "spread": spread, "cadence": CADENCE, "freezes": freezes,
+                          "jumps": jumps, "faults": sorted(listed, key=lambda f: f["at"])}))
     summary = (f"{args.video}: {len(steps)} steps, {int(judged.sum())} moving, {cuts} cuts; median step "
                f"{np.median(steps[judged]) if judged.any() else 0:.2f} px; spread {spread:.3f} "
                f"(limit {CADENCE}); {freezes} freezes, {jumps} jumps, {len(stalls)} holds")
@@ -225,7 +244,7 @@ def main():
     if args.frames:
         os.makedirs(args.frames, exist_ok=True)
     for kind, i in sorted(worst, key=lambda f: f[1]):
-        when = times[i + 1] if i + 1 < len(times) else len(steps) / fps
+        when = shown_at(i)
         print(f"  {kind} into frame {i + 1} ({when:.2f} s): step {steps[i]:.2f} px, "
               f"{ratio[i]:.2f}x the {local[i]:.2f} px around it", file=sys.stderr)
         if args.frames and i + 1 < len(times):
@@ -233,9 +252,13 @@ def main():
             picture(args.video, times[i], times[i + 1], out)
             print(f"    {out}", file=sys.stderr)
     for i, run in stalls[:args.worst]:
-        when = times[i + 1] if i + 1 < len(times) else len(steps) / fps
+        when = shown_at(i)
         print(f"  hold at {when:.2f} s: {run} frame{'s' if run > 1 else ''} repeated while the picture moves",
               file=sys.stderr)
+        if args.frames and i + 1 < len(times):
+            out = os.path.join(args.frames, f"{when:07.2f}s-hold.png")
+            picture(args.video, times[i], times[i + 1], out)
+            print(f"    {out}", file=sys.stderr)
     if faults or stalls or spread > CADENCE:
         print("motion-smoothness: JERKY " + summary, file=sys.stderr)
         sys.exit(1)

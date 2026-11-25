@@ -149,6 +149,34 @@ the two either side, moving only what moved. It hides stalls, so it never
 judges an app.
 `tests/test_motion_smoothness.py` proves both directions on a synthetic pan.
 
+### No app's own animation stutters
+
+    bin/app-smoothness                       # the app checked out here, on the iPhone: exit 1 on a stutter
+    bin/app-smoothness --frames /tmp/s       # and each stutter as the frame before beside the frame after
+    bin/app-smoothness --recording rec.mp4   # judge a recording made already (rec.xcresult beside it)
+    bin/app-smoothness --every-app           # homebase, hourly: each app whose main moved
+
+It plays the app's `AppReviewDemoTests` on homebase's iPhone (visual-test-tools
+`device-demo`, holding the phone with `iphone`) and runs `motion-smoothness` over
+the whole recording, with nothing skipped after a touch. Each stutter is printed
+with the test's last action before it:
+
+    app-smoothness: JERKY flighttrack on iPhone 12 mini iOS 27.2, 88.8 s; 6 stutters
+      hold   at   11.07 s   1 frame late while the picture moves    1.11 s after Tap "flight-result" Button
+
+A stutter is a hold: a frame late while the picture moves. The phone records 30
+pictures a second and stores one only when the screen changes, so a late frame is
+a gap. The step-against-neighbours faults are not counted: a smooth iOS spring at
+30 fps fails them on its own (`tests/test_motion_smoothness.py`, "a spring
+recorded at 30 fps").
+
+It finds the project, scheme and UI-test target from the test file, so every app is
+checked the same way. `--every-app` reads `~/.config/ci-runners/repos`, posts an
+`app-smoothness` commit status on each app's main (red on a stutter), and keeps
+one open `app-smoothness` issue per app while it stutters. It runs hourly from
+dotfiles' `jobs.toml`, not on every push: one app takes about 6 minutes (3 holding
+the phone), and there is one phone for every app. No model is called.
+
 ## Conforming picture to a mix that changed length
 
 A mix is re-comped — a join moves, a take runs longer, a passage becomes one

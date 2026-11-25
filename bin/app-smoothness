@@ -1,0 +1,339 @@
+#!/usr/bin/env python3
+"""app-smoothness - whether an iPhone app's own animations stutter, on a real iPhone.
+
+    app-smoothness [DIR]                     # the app in DIR (default: here), at what is checked out
+    app-smoothness --recording R.mp4         # judge a recording made already (R.xcresult beside it)
+    app-smoothness --frames OUT/ [DIR]       # and each stutter as a picture: the frame before beside the one after
+
+Every app has UITests/AppReviewDemoTests.swift, which taps through the app at a
+person's pace. This plays it on the iPhone plugged into this Mac (visual-test-tools'
+device-demo, holding the phone with `iphone`), records the screen, and runs
+motion-smoothness over the whole recording. Nothing is skipped: the app's own
+animation right after a touch is where a stutter lives, so unlike a product film
+(ui-test-film) it is judged too. Exit 1 on any stutter, each printed with its
+time and the test's last action before it:
+
+    app-smoothness: JERKY flighttrack on iPhone 12 mini iOS 27.2, 88.8 s; 6 stutters
+      hold   at   11.07 s   1 frame late while the picture moves    1.11 s after Tap "flight-result" Button
+
+A stutter is a hold: the screen late with a new picture while it is moving. The
+phone records 30 pictures a second and stores one only when the screen changes,
+so a frame the app drew late is a gap in the recording. motion-smoothness's other
+faults compare each step with its neighbours', which an iOS spring at 30 pictures
+a second fails on its own (its steps shrink by half every two frames), so they
+are not counted here.
+
+The phone, not the simulator: a loaded Mac drops a simulator's frames, so a stutter
+there may be the Mac's; on the phone it is the app's.
+
+It finds the project, the scheme and the UI-test target from the test's file, so
+every app is checked the same way with no per-app script. It makes no model call.
+"""
+
+import argparse
+import json
+import os
+import pathlib
+import re
+import subprocess
+import sys
+
+HERE = pathlib.Path(__file__).resolve().parent
+SMOOTHNESS = HERE / "motion-smoothness"
+DEVICE_DEMO = pathlib.Path.home() / "Projects/visual-test-tools/bin/device-demo"
+TEST_FILE = "AppReviewDemoTests.swift"
+TEST_CLASS = "AppReviewDemoTests"
+
+
+def fail(message):
+    sys.exit(f"app-smoothness: {message}")
+
+
+def run(argv, **kwargs):
+    return subprocess.run([str(a) for a in argv], check=True, text=True, **kwargs)
+
+
+def output(argv):
+    return run(argv, capture_output=True).stdout
+
+
+def test_file(root):
+    tracked = output(["git", "-C", root, "ls-files", f"*{TEST_FILE}"]).split()
+    found = sorted({root / path for path in tracked if pathlib.Path(path).name == TEST_FILE})
+    if not found:
+        fail(f"{root} has no {TEST_FILE}: every iOS app needs one (App Review's screen recording)")
+    if len(found) > 1:
+        fail(f"{root} has {len(found)} {TEST_FILE} files: {', '.join(str(f) for f in found)}")
+    return found[0]
+
+
+def project_for(test):
+    """The .xcodeproj nearest above the test, made by xcodegen first where there is a
+    project.yml and git does not track the project it makes."""
+    for folder in test.parents:
+        if (folder / "project.yml").exists() and \
+                not output(["git", "-C", folder, "ls-files", "*.xcodeproj/project.pbxproj"]).strip():
+            run(["xcodegen", "generate", "--quiet", "--spec", folder / "project.yml"])
+        projects = list(folder.glob("*.xcodeproj"))
+        if len(projects) == 1:
+            return projects[0]
+        if len(projects) > 1:
+            fail(f"{folder} has {len(projects)} Xcode projects")
+    fail(f"no .xcodeproj above {test}")
+
+
+def target_for(project, test):
+    """The test target that compiles the test file: by its build file, or by the
+    synchronized folder (Xcode 16) the file sits in."""
+    objects = json.loads(output(["plutil", "-convert", "json", "-o", "-", project / "project.pbxproj"]))["objects"]
+    targets = {key: o for key, o in objects.items() if o.get("isa") == "PBXNativeTarget"}
+    refs = {key for key, o in objects.items() if o.get("isa") == "PBXFileReference"
+            and pathlib.Path(o.get("path", "")).name == TEST_FILE}
+    builds = {key for key, o in objects.items() if o.get("isa") == "PBXBuildFile" and o.get("fileRef") in refs}
+    for target in targets.values():
+        for phase in target.get("buildPhases", []):
+            if set(objects[phase].get("files", [])) & builds:
+                return target["name"]
+    relative = test.relative_to(project.parent)
+    for target in targets.values():
+        for group in target.get("fileSystemSynchronizedGroups", []):
+            if objects[group].get("path") in [str(p) for p in relative.parents]:
+                return target["name"]
+    fail(f"no target in {project.name} compiles {relative}")
+
+
+def scheme_for(project, target):
+    """The shared scheme that tests the target, else the one named for the project."""
+    for scheme in sorted((project / "xcshareddata/xcschemes").glob("*.xcscheme")):
+        text = scheme.read_text()
+        tests = text[text.find("<TestAction"):text.find("</TestAction>")]
+        if f'BlueprintName = "{target}"' in tests:
+            return scheme.stem
+    return project.stem
+
+
+def record(root, work):
+    test = test_file(root)
+    project = project_for(test)
+    target = target_for(project, test)
+    scheme = scheme_for(project, target)
+    recording = work / "recording.mp4"
+    print(f"==> {project.relative_to(root)}: scheme {scheme}, {target}/{TEST_CLASS}, on the iPhone", flush=True)
+    env = {**os.environ, "PATH": f"{pathlib.Path.home() / 'bin'}:{os.environ['PATH']}"}
+    log = work / "record.log"
+    with log.open("w") as out:
+        made = subprocess.run([str(a) for a in [DEVICE_DEMO, project, scheme, f"{target}/{TEST_CLASS}", recording]],
+                              cwd=project.parent, env=env, stdout=out, stderr=subprocess.STDOUT)
+    if made.returncode:
+        said = [line for line in log.read_text().splitlines() if "DVTDeveloperAccount" not in line]
+        raise NotRecorded("\n".join(said[-25:]))
+    return recording
+
+
+class NotRecorded(Exception):
+    """The demo test did not run to its end on the phone: what device-demo said last."""
+
+
+def activities(result):
+    """Each step of the test as (start in epoch seconds, title), in order, and the phone's name."""
+    tests = json.loads(output(["xcrun", "xcresulttool", "get", "test-results", "tests", "--path", result]))
+    ids = []
+
+    def walk(node):
+        if node.get("nodeType") == "Test Case":
+            ids.append(node["nodeIdentifier"])
+        for child in node.get("children", []):
+            walk(child)
+    for node in tests.get("testNodes", []):
+        walk(node)
+    devices = tests.get("devices") or [{}]
+    phone = " ".join(filter(None, [devices[0].get("modelName"), "iOS " + devices[0].get("osVersion", "?")]))
+    steps = []
+
+    def gather(nodes):
+        for node in nodes:
+            if "startTime" in node:
+                steps.append((float(node["startTime"]), node["title"]))
+            gather(node.get("childActivities", []))
+    for test_id in ids:
+        found = json.loads(output(["xcrun", "xcresulttool", "get", "test-results", "activities",
+                                   "--path", result, "--test-id", test_id]))
+        for run_ in found.get("testRuns", []):
+            gather(run_.get("activities", []))
+    return sorted(steps), phone
+
+
+def recording_started(result):
+    """When the screen recording began, in epoch seconds: its attachment's timestamp."""
+    folder = pathlib.Path(output(["mktemp", "-d", "-t", "app-smoothness"]).strip())
+    run(["xcrun", "xcresulttool", "export", "attachments", "--path", result, "--output-path", folder],
+        capture_output=True)
+    found = [a for test in json.loads((folder / "manifest.json").read_text()) for a in test["attachments"]]
+    videos = [a for a in found if re.search(r"\.(mp4|mov)$", a["exportedFileName"])]
+    run(["rm", "-rf", folder])
+    return float(videos[0]["timestamp"]) if videos else None
+
+
+ACTION = re.compile(r"^(Tap|Double tap|Two-finger tap|Press|Long press|Type|Swipe|Scroll|Drag|Pinch|Rotate|"
+                    r"Open|Launch|Terminate|Activate)\b")
+
+
+def step_at(steps, start, seconds):
+    """What the test last did to the app before SECONDS into the recording, and how long
+    before. The recording's timestamps count from its attachment's: a touch's motion
+    starts 0.1 to 0.5 s after the test's Synthesize event."""
+    if start is None:
+        return ""
+    moment = start + seconds
+    done = [(at, title) for at, title in steps if at <= moment and ACTION.match(title)]
+    if not done:
+        return "before the test's first action"
+    at, title = done[-1]
+    said = ' '.join(title.split())
+    return f"{moment - at:5.2f} s after {said if len(said) <= 90 else said[:89] + '…'}"
+
+
+def judge(name, recording, frames=None):
+    """The verdict on a recording: whether it is jerky, and the report, a line per stutter."""
+    result = recording.with_suffix(".xcresult")
+    steps, phone, start = ([], "", None)
+    if result.exists():
+        steps, phone = activities(result)
+        start = recording_started(result)
+    judged = subprocess.run([str(SMOOTHNESS), "--json", str(recording)]
+                            + (["--frames", str(frames), "--worst", "1000"] if frames else []),
+                            capture_output=True, text=True)
+    if judged.returncode not in (0, 1):
+        fail(f"motion-smoothness failed: {judged.stderr.strip()}")
+    verdict = json.loads(judged.stdout)
+    faults = [{**f, "step": step_at(steps, start, f["at"])} for f in verdict["faults"] if f["kind"] == "hold"]
+    seconds = float(output(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0",
+                            recording]).strip())
+    jerky = bool(faults)
+    lines = [f"app-smoothness: {'JERKY' if jerky else 'smooth'} {name} on {phone or 'the phone'}, "
+             f"{seconds:.1f} s; {len(faults)} stutters"]
+    for fault in faults:
+        how = f"{fault['frames']} frame{'s' if fault['frames'] > 1 else ''} late while the picture moves"
+        lines.append(f"  hold   at {fault['at']:7.2f} s   {how:38s} {fault['step']}")
+    return {"app": name, "phone": phone, "seconds": seconds, "recording": str(recording), "jerky": jerky,
+            "faults": faults, "report": "\n".join(lines)}
+
+
+# ---- every app, batched: the phone is one, and a run holds it about three minutes
+
+CI_REPOS = pathlib.Path.home() / ".config/ci-runners/repos"
+CACHE = pathlib.Path.home() / ".cache/app-smoothness"
+LABEL = "app-smoothness"
+TITLE = "Animations stutter on the iPhone (app-smoothness)"
+
+
+def gh(*argv, check=True):
+    return subprocess.run(["gh", *[str(a) for a in argv]], capture_output=True, text=True, check=check).stdout
+
+
+def checkout(repo):
+    """REPO's main, fresh, in a clone of its own under the cache; None when main has no demo test."""
+    folder = CACHE / "repos" / repo.replace("/", "-")
+    if not (folder / ".git").exists():
+        run(["gh", "repo", "clone", repo, folder, "--", "--quiet"])
+    run(["git", "-C", folder, "fetch", "--quiet", "origin"])
+    branch = output(["git", "-C", folder, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"]).strip()
+    if not any(pathlib.Path(p).name == TEST_FILE for p in
+               output(["git", "-C", folder, "ls-tree", "-r", "--name-only", branch]).split()):
+        return None, None
+    run(["git", "-C", folder, "checkout", "--quiet", "--force", "--detach", branch])
+    run(["git", "-C", folder, "clean", "-fdxq"])
+    run(["git", "-C", folder, "submodule", "update", "--quiet", "--init", "--recursive"])
+    return folder, output(["git", "-C", folder, "rev-parse", "HEAD"]).strip()
+
+
+def report(repo, sha, verdict):
+    """A red or green app-smoothness status on the commit, and one open issue per app
+    while it stutters or its demo test will not play on the phone: opened, kept up to
+    date, closed once a run is smooth. VERDICT is judge()'s, or {"error": what it said}."""
+    if "error" in verdict:
+        state, headline = "error", f"{TEST_CLASS} did not play to its end on the iPhone"
+        body = (f"`app-smoothness` could not record `{TEST_CLASS}` on the homebase iPhone at {sha[:7]}, so "
+                f"nothing was judged. App Review asks for this recording too. The end of what `device-demo` "
+                f"said:\n\n```\n{verdict['error']}\n```")
+    else:
+        state = "failure" if verdict["jerky"] else "success"
+        headline = verdict["report"].splitlines()[0].removeprefix("app-smoothness: ")
+        body = (f"`app-smoothness` played `{TEST_CLASS}` on the homebase iPhone at {sha[:7]}, and the app drew "
+                f"frames late while its own animation was moving. Each line: when the late frame came, in the "
+                f"recording, and the test's last action before it.\n\n```\n{verdict['report']}\n```")
+    body += ("\n\nOn homebase, from the repo: `~/Projects/video-tools/bin/app-smoothness --frames /tmp/stutters` "
+             "(each stutter as the frame before beside the frame after). This issue closes itself once a run "
+             "of `app-smoothness --every-app` (hourly, dotfiles jobs.toml) finds none.")
+    gh("api", "--silent", f"repos/{repo}/statuses/{sha}", "-f", f"state={state}", "-f", f"context={LABEL}",
+       "-f", f"description={headline[:140]}")
+    gh("label", "create", LABEL, "-R", repo, "--color", "d93f0b", "--force",
+       "--description", "an animation stutters on the iPhone (video-tools bin/app-smoothness)")
+    found = json.loads(gh("issue", "list", "-R", repo, "--label", LABEL, "--state", "open", "--json", "number"))
+    if state == "success":
+        for issue in found:
+            gh("issue", "close", issue["number"], "-R", repo, "--comment", f"Smooth at {sha[:7]}: {headline}")
+    elif found:
+        gh("issue", "edit", found[0]["number"], "-R", repo, "--body", body)
+    else:
+        gh("issue", "create", "-R", repo, "--title", TITLE, "--label", LABEL, "--body", body)
+
+
+def every_app():
+    """Each app in this Mac's CI list whose main changed since its last check, judged in turn."""
+    if subprocess.run([pathlib.Path.home() / "bin/iphone", "status"]).returncode:
+        fail("the iPhone is not ready; nothing was checked")
+    state_path = CACHE / "judged.json"
+    state = json.loads(state_path.read_text()) if state_path.exists() else {}
+    repos = [line.strip() for line in CI_REPOS.read_text().splitlines() if line.strip() and not line.startswith("#")]
+    for repo in repos:
+        folder, sha = checkout(repo)
+        if folder is None or state.get(repo) == sha:
+            continue
+        print(f"==> {repo} at {sha[:7]}", flush=True)
+        work = (CACHE / "work" / repo.replace("/", "-")).resolve()
+        work.mkdir(parents=True, exist_ok=True)
+        try:
+            verdict = judge(repo, record(folder, work))
+            print(verdict["report"], flush=True)
+        except NotRecorded as error:
+            verdict = {"error": str(error)}
+            print(f"app-smoothness: {repo}: not recorded:\n{error}", flush=True)
+        report(repo, sha, verdict)
+        state[repo] = sha
+        state_path.write_text(json.dumps(state, indent=2))
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("dir", nargs="?", default=".", type=pathlib.Path)
+    parser.add_argument("--recording", type=pathlib.Path, help="judge this recording (and the .xcresult beside it)")
+    parser.add_argument("--work", type=pathlib.Path, help="where the recording and its result bundle go")
+    parser.add_argument("--frames", type=pathlib.Path, help="save each stutter's frames before and after it here")
+    parser.add_argument("--json", action="store_true", help="the verdict as JSON on stdout")
+    parser.add_argument("--every-app", action="store_true",
+                        help="each app in ~/.config/ci-runners/repos whose main changed since it was last judged: "
+                             "an app-smoothness commit status, and one issue per app while it stutters")
+    options = parser.parse_args()
+    if options.every_app:
+        return every_app()
+
+    root = pathlib.Path(output(["git", "-C", options.dir, "rev-parse", "--show-toplevel"]).strip()) \
+        if not options.recording else None
+    work = (options.work or pathlib.Path("/tmp") / f"app-smoothness-{root.name if root else options.recording.stem}")
+    work.mkdir(parents=True, exist_ok=True)
+    try:
+        recording = options.recording.resolve() if options.recording else record(root, work.resolve())
+    except NotRecorded as error:
+        fail(f"{TEST_CLASS} did not play to its end on the iPhone:\n{error}")
+    verdict = judge(root.name if root else recording.stem, recording, options.frames)
+    if options.json:
+        print(json.dumps({k: v for k, v in verdict.items() if k != "report"}, indent=2))
+    print(verdict["report"], file=sys.stderr if options.json else sys.stdout)
+    if options.frames:
+        print(f"  the frames either side of each: {options.frames}", file=sys.stderr)
+    sys.exit(1 if verdict["jerky"] else 0)
+
+
+if __name__ == "__main__":
+    main()
