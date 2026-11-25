@@ -28,6 +28,9 @@ there may be the Mac's; on the phone it is the app's.
 
 It finds the project, the scheme and the UI-test target from the test's file, so
 every app is checked the same way with no per-app script. It makes no model call.
+
+Every TestFlight build runs it, after the upload: agent-ops' mac.yml, step
+"Animations on the iPhone". A stutter turns that build red.
 """
 
 import argparse
@@ -239,92 +242,6 @@ def judge(name, recording, frames=None):
             "faults": faults, "report": "\n".join(lines)}
 
 
-# ---- every app, batched: the phone is one, and a run holds it about three minutes
-
-CI_REPOS = pathlib.Path.home() / ".config/ci-runners/repos"
-CACHE = pathlib.Path.home() / ".cache/app-smoothness"
-LABEL = "app-smoothness"
-TITLES = {"failure": "Animations stutter on the iPhone (app-smoothness)",
-          "error": f"{TEST_CLASS} does not play to its end on the iPhone (app-smoothness)"}
-
-
-def gh(*argv, check=True):
-    return subprocess.run(["gh", *[str(a) for a in argv]], capture_output=True, text=True, check=check).stdout
-
-
-def checkout(repo):
-    """REPO's main, fresh, in a clone of its own under the cache; None when main has no demo test."""
-    folder = CACHE / "repos" / repo.replace("/", "-")
-    if not (folder / ".git").exists():
-        run(["gh", "repo", "clone", repo, folder, "--", "--quiet"])
-    run(["git", "-C", folder, "fetch", "--quiet", "origin"])
-    branch = output(["git", "-C", folder, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"]).strip()
-    if not any(pathlib.Path(p).name == TEST_FILE for p in
-               output(["git", "-C", folder, "ls-tree", "-r", "--name-only", branch]).split()):
-        return None, None
-    run(["git", "-C", folder, "checkout", "--quiet", "--force", "--detach", branch])
-    run(["git", "-C", folder, "clean", "-fdxq"])
-    run(["git", "-C", folder, "submodule", "update", "--quiet", "--init", "--recursive"])
-    return folder, output(["git", "-C", folder, "rev-parse", "HEAD"]).strip()
-
-
-def report(repo, sha, verdict):
-    """A red or green app-smoothness status on the commit, and one open issue per app
-    while it stutters or its demo test will not play on the phone: opened, kept up to
-    date (its title says which), closed once a run is smooth. VERDICT is judge()'s, or {"error": what it said}."""
-    if "error" in verdict:
-        state, headline = "error", f"{TEST_CLASS} did not play to its end on the iPhone"
-        body = (f"`app-smoothness` could not record `{TEST_CLASS}` on the homebase iPhone at {sha[:7]}, so "
-                f"nothing was judged. App Review asks for this recording too. The end of what `device-demo` "
-                f"said:\n\n```\n{verdict['error']}\n```")
-    else:
-        state = "failure" if verdict["jerky"] else "success"
-        headline = verdict["report"].splitlines()[0].removeprefix("app-smoothness: ")
-        body = (f"`app-smoothness` played `{TEST_CLASS}` on the homebase iPhone at {sha[:7]}, and the app drew "
-                f"frames late while its own animation was moving. Each line: when the late frame came, in the "
-                f"recording, and the test's last action before it.\n\n```\n{verdict['report']}\n```")
-    body += ("\n\nOn homebase, from the repo: `~/Projects/video-tools/bin/app-smoothness --frames /tmp/stutters` "
-             "(each stutter as the frame before beside the frame after). This issue closes itself once a run "
-             "of `app-smoothness --every-app` (hourly, dotfiles jobs.toml) finds none.")
-    gh("api", "--silent", f"repos/{repo}/statuses/{sha}", "-f", f"state={state}", "-f", f"context={LABEL}",
-       "-f", f"description={headline[:140]}")
-    gh("label", "create", LABEL, "-R", repo, "--color", "d93f0b", "--force",
-       "--description", "an animation stutters on the iPhone (video-tools bin/app-smoothness)")
-    found = json.loads(gh("issue", "list", "-R", repo, "--label", LABEL, "--state", "open", "--json", "number"))
-    if state == "success":
-        for issue in found:
-            gh("issue", "close", issue["number"], "-R", repo, "--comment", f"Smooth at {sha[:7]}: {headline}")
-    elif found:
-        gh("issue", "edit", found[0]["number"], "-R", repo, "--title", TITLES[state], "--body", body)
-    else:
-        gh("issue", "create", "-R", repo, "--title", TITLES[state], "--label", LABEL, "--body", body)
-
-
-def every_app():
-    """Each app in this Mac's CI list whose main changed since its last check, judged in turn."""
-    if subprocess.run([pathlib.Path.home() / "bin/iphone", "status"]).returncode:
-        fail("the iPhone is not ready; nothing was checked")
-    state_path = CACHE / "judged.json"
-    state = json.loads(state_path.read_text()) if state_path.exists() else {}
-    repos = [line.strip() for line in CI_REPOS.read_text().splitlines() if line.strip() and not line.startswith("#")]
-    for repo in repos:
-        folder, sha = checkout(repo)
-        if folder is None or state.get(repo) == sha:
-            continue
-        print(f"==> {repo} at {sha[:7]}", flush=True)
-        work = (CACHE / "work" / repo.replace("/", "-")).resolve()
-        work.mkdir(parents=True, exist_ok=True)
-        try:
-            verdict = judge(repo, record(folder, work))
-            print(verdict["report"], flush=True)
-        except NotRecorded as error:
-            verdict = {"error": str(error)}
-            print(f"app-smoothness: {repo}: not recorded:\n{error}", flush=True)
-        report(repo, sha, verdict)
-        state[repo] = sha
-        state_path.write_text(json.dumps(state, indent=2))
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("dir", nargs="?", default=".", type=pathlib.Path)
@@ -332,13 +249,7 @@ def main():
     parser.add_argument("--work", type=pathlib.Path, help="where the recording and its result bundle go")
     parser.add_argument("--frames", type=pathlib.Path, help="save each stutter's frames before and after it here")
     parser.add_argument("--json", action="store_true", help="the verdict as JSON on stdout")
-    parser.add_argument("--every-app", action="store_true",
-                        help="each app in ~/.config/ci-runners/repos whose main changed since it was last judged: "
-                             "an app-smoothness commit status, and one issue per app while it stutters")
     options = parser.parse_args()
-    if options.every_app:
-        return every_app()
-
     root = pathlib.Path(output(["git", "-C", options.dir, "rev-parse", "--show-toplevel"]).strip()) \
         if not options.recording else None
     work = (options.work or pathlib.Path("/tmp") / f"app-smoothness-{root.name if root else options.recording.stem}")

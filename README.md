@@ -155,7 +155,6 @@ judges an app.
     bin/app-smoothness                       # the app checked out here, on the iPhone: exit 1 on a stutter
     bin/app-smoothness --frames /tmp/s       # and each stutter as the frame before beside the frame after
     bin/app-smoothness --recording rec.mp4   # judge a recording made already (rec.xcresult beside it)
-    bin/app-smoothness --every-app           # homebase, hourly: each app whose main moved
 
 It plays the app's `AppReviewDemoTests` on homebase's iPhone (visual-test-tools
 `device-demo`, holding the phone with `iphone`) and runs `motion-smoothness` over
@@ -172,11 +171,13 @@ a gap. The step-against-neighbours faults are not counted: a smooth iOS spring a
 recorded at 30 fps").
 
 It finds the project, scheme and UI-test target from the test file, so every app is
-checked the same way. `--every-app` reads `~/.config/ci-runners/repos`, posts an
-`app-smoothness` commit status on each app's main (red on a stutter), and keeps
-one open `app-smoothness` issue per app while it stutters. It runs hourly from
-dotfiles' `jobs.toml`, not on every push: one app takes about 6 minutes (3 holding
-the phone), and there is one phone for every app. No model is called.
+checked the same way. No model is called.
+
+Every TestFlight build runs it on the commit it uploaded, as the last step of
+agent-ops' [`mac.yml`](https://github.com/bkazez/agent-ops/blob/main/.github/workflows/mac.yml)
+("Animations on the iPhone"). A stutter, or a demo test that does not play to its
+end, turns the build red; the upload has already happened. An app without the
+test, or a phone that is not ready, gets a warning on the run instead.
 
 ## Conforming picture to a mix that changed length
 
