@@ -168,6 +168,11 @@ def main():
         found = holds_in(tmp / "stalled.mp4", stalled, 30)
         check("one held mid-spring for two frames is a hold, at its time",
               len(found) == 1 and found[0]["frames"] == 2 and abs(found[0]["at"] - 21 / 30) < 0.02, str(found))
+        # product-video's own camera moves are passed with --skip; a camera eased from rest
+        # starts with steps too small to tell from a held frame.
+        skipped = json.loads(subprocess.run([sys.executable, str(CHECK), "--json", "--skip", "0.6-1.0",
+                                             str(tmp / "stalled.mp4")], capture_output=True, text=True).stdout)["faults"]
+        check("a hold inside a --skip span is not judged", [f for f in skipped if f["kind"] == "hold"] == [], str(skipped))
 
         # A recording: each picture once on time with a copy 2 ms after it, and for the
         # middle second a picture every 50 ms (pictures 60, 63, ... 117).

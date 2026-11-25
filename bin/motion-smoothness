@@ -227,7 +227,8 @@ def main():
     steps, local, ratio, judged, faults, spread = judge(steps, same, fps, skip, times)
     freezes = sum(1 for kind, _ in faults if kind == "freeze")
     jumps = len(faults) - freezes
-    stalls = holds(args.video, fps)
+    stalls = [(i, run) for i, run in holds(args.video, fps)
+              if not any(start - NEAR <= times[min(i + 1, len(times) - 1)] <= end + NEAR for start, end in skip)]
     cuts = int((~same).sum())
     def shown_at(i):
         return float(times[i + 1]) if i + 1 < len(times) else len(steps) / fps
