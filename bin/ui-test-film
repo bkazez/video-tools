@@ -3,6 +3,7 @@
 
     ui-test-film STORYBOARD --project P.xcodeproj --scheme S --test TARGET/Class/testMethod \\
                  --device iPhone-16-Pro-Max --out film.mp4 [--variant vertical] [--recording R.mp4]
+    ui-test-film STORYBOARD --phone --project ... --out film.mp4     # on the iPhone plugged in
 
 An app that is MapKit, SwiftUI springs and UIKit transitions cannot draw itself
 one frame at a time the way Wavelength and arc do: those run on the wall clock,
@@ -36,6 +37,7 @@ import sys
 HERE = pathlib.Path(__file__).resolve().parent
 COMPOSITOR = HERE / "product-video"
 SIM_FILM = pathlib.Path.home() / "Projects/visual-test-tools/bin/sim-film"
+DEVICE_DEMO = pathlib.Path.home() / "Projects/visual-test-tools/bin/device-demo"
 
 
 def say(message):
@@ -65,6 +67,13 @@ def on_the_beat(board):
 
 
 def record(storyboard, options, recording):
+    if options.phone:
+        # The phone cannot read the Mac's files, so it gets the storyboard itself, and
+        # its recording is Xcode's own (device-demo), from before the app launches.
+        say("recording the test on the iPhone")
+        env = {**os.environ, "TEST_RUNNER_FILM_BOARD_JSON": storyboard.read_text()}
+        run([DEVICE_DEMO, options.project, options.scheme, options.test, recording], env=env)
+        return
     say("recording the test")
     env = {**os.environ, "TEST_RUNNER_FILM_BOARD": str(storyboard)}
     if options.status_time:
@@ -133,6 +142,9 @@ def main():
     parser.add_argument("--test")
     parser.add_argument("--device", default="iPhone-16-Pro-Max",
                         help="a simulator device type whose screen is the bezel's hole")
+    parser.add_argument("--phone", action="store_true",
+                        help="record on the iPhone plugged into this Mac (visual-test-tools' device-demo), "
+                             "which draws its own frames whatever the Mac's load")
     parser.add_argument("--out", type=pathlib.Path, required=True)
     parser.add_argument("--variant", help="the storyboard's named variant block, such as `vertical`")
     parser.add_argument("--recording", type=pathlib.Path,
@@ -160,6 +172,9 @@ def main():
     if not log_path.exists():
         fail(f"no {log_path.name}: the test did not play the storyboard (Filming's playFilm)")
     log = json.loads(log_path.read_text())
+    if "recordingStarted" in log:
+        # A phone's recording is Xcode's: the film's zero is placed by the clock.
+        log["zero"] = log["zeroDate"] - log["recordingStarted"]
     report(log)
 
     layout_argv = [COMPOSITOR, storyboard, "--layout"] + (["--variant", options.variant] if options.variant else [])
@@ -169,6 +184,11 @@ def main():
     seconds = board.get("seconds", 30)
     count = round(seconds * fps)
 
+    shot = run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height",
+                "-of", "csv=p=0", recording], capture_output=True).stdout.strip().split(",")
+    if abs(int(shot[0]) / int(shot[1]) - screen["width"] / screen["height"]) > 0.01:
+        fail(f"the recording is {shot[0]}x{shot[1]}, not the shape of the {board.get('chrome')} bezel's screen "
+             f"({screen['width']}x{screen['height']}): record on that phone, or name its bezel in the storyboard")
     pieces = segments(log, seconds, board.get("slow", 1.0))
     say(f"cutting {seconds:g}s from {len(pieces)} stretches of the recording")
     frames = work / "frames"
