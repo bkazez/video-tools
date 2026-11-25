@@ -96,7 +96,7 @@ def main():
         ease = tmp / "ease.mp4"
         write(ease, [0.0] * 30 + [90 * (4 * t ** 3 if t < 0.5 else 1 - (-2 * t + 2) ** 3 / 2)
                                   for t in (n / 45 for n in range(46))] + [90.0] * 30)
-        done = subprocess.run([sys.executable, str(CHECK), "--skip", f"{30 / FPS}-{75 / FPS}", str(ease)],
+        done = subprocess.run([sys.executable, str(CHECK), "--camera", f"{30 / FPS}-{75 / FPS}", str(ease)],
                               capture_output=True, text=True)
         check("a camera move it is told to skip is not judged", done.returncode == 0, done.stderr.strip()[-200:])
 
@@ -168,11 +168,15 @@ def main():
         found = holds_in(tmp / "stalled.mp4", stalled, 30)
         check("one held mid-spring for two frames is a hold, at its time",
               len(found) == 1 and found[0]["frames"] == 2 and abs(found[0]["at"] - 21 / 30) < 0.02, str(found))
-        # product-video's own camera moves are passed with --skip; a camera eased from rest
-        # starts with steps too small to tell from a held frame.
-        skipped = json.loads(subprocess.run([sys.executable, str(CHECK), "--json", "--skip", "0.6-1.0",
-                                             str(tmp / "stalled.mp4")], capture_output=True, text=True).stdout)["faults"]
-        check("a hold inside a --skip span is not judged", [f for f in skipped if f["kind"] == "hold"] == [], str(skipped))
+        # product-video's own camera moves are passed with --camera; a camera eased from rest
+        # starts with steps too small to tell from a held frame. An app's eased animation
+        # (--skip) is a curve, but a stall in it is still a stall.
+        def held(flag):
+            found = json.loads(subprocess.run([sys.executable, str(CHECK), "--json", flag, "0.6-1.0",
+                                               str(tmp / "stalled.mp4")], capture_output=True, text=True).stdout)["faults"]
+            return [f for f in found if f["kind"] == "hold"]
+        check("a hold inside a --camera span is not judged", held("--camera") == [], "")
+        check("a hold inside a --skip span still is", len(held("--skip")) == 1, "")
 
         # A recording: each picture once on time with a copy 2 ms after it, and for the
         # middle second a picture every 50 ms (pictures 60, 63, ... 117).

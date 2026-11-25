@@ -30,16 +30,18 @@ A picture that is not moving, or barely, is not judged: a still is not a stall.
 Barely is under half an analysis pixel a frame (about a pixel of a 1080p film):
 a hitch that small cannot be seen.
 Nor are the frames beside a rest of REST seconds, where motion starts or settles.
-Nor is a span given with --skip: product-video passes its own camera moves, which
+Nor is a span given with --camera: product-video passes its own camera moves, which
 it draws on a curve, since a move eased to a stop slows by twice a frame as it
-lands and would read as a freeze or a jump.
+lands and would read as a freeze or a jump, and one eased from rest starts with
+steps too small to tell from a held frame. A span given with --skip, an app's own
+eased animation, is judged for holds alone: a stall there is still a stall.
 Nor is a cut, where nothing in one frame has a counterpart in the next. Exit 1
 on any fault, with the worst frames and their times.
 
     motion-smoothness film.mp4
     motion-smoothness --loop loop.mp4          # the last frame into the first, too
     motion-smoothness --json film.mp4          # every step, for a plot, and every fault with its time
-    motion-smoothness --skip 7.0-7.75 --skip 9.0-9.5 film.mp4
+    motion-smoothness --camera 7.0-7.75 --skip 9.0-9.5 film.mp4
     motion-smoothness --frames out/ film.mp4   # each fault printed, as a picture: the frame
                                                # before it beside the frame after, so one look
                                                # says what jumped, with no frame-by-frame viewing
@@ -217,18 +219,22 @@ def main():
     parser.add_argument("--loop", action="store_true", help="also judge the last frame into the first")
     parser.add_argument("--json", action="store_true", help="print every step")
     parser.add_argument("--worst", type=int, default=8, help="how many faults to print")
+    parser.add_argument("--camera", action="append", default=[], metavar="START-END",
+                        help="seconds not judged at all: the film's own camera moves")
     parser.add_argument("--skip", action="append", default=[], metavar="START-END",
-                        help="seconds not judged: the film's own camera moves")
+                        help="seconds judged for holds alone: an app's own eased animation")
     parser.add_argument("--frames", metavar="DIR", help="save each printed fault's frames before and after it here")
     args = parser.parse_args()
 
     steps, same, times, fps = measure(args.video, args.loop)
-    skip = [tuple(float(t) for t in span.split("-")) for span in args.skip]
-    steps, local, ratio, judged, faults, spread = judge(steps, same, fps, skip, times)
+    def spans(given):
+        return [tuple(float(t) for t in span.split("-")) for span in given]
+    camera = spans(args.camera)
+    steps, local, ratio, judged, faults, spread = judge(steps, same, fps, camera + spans(args.skip), times)
     freezes = sum(1 for kind, _ in faults if kind == "freeze")
     jumps = len(faults) - freezes
     stalls = [(i, run) for i, run in holds(args.video, fps)
-              if not any(start - NEAR <= times[min(i + 1, len(times) - 1)] <= end + NEAR for start, end in skip)]
+              if not any(start - NEAR <= times[min(i + 1, len(times) - 1)] <= end + NEAR for start, end in camera)]
     cuts = int((~same).sum())
     def shown_at(i):
         return float(times[i + 1]) if i + 1 < len(times) else len(steps) / fps
