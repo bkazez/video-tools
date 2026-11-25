@@ -334,7 +334,7 @@ try? smooth.run()
 smooth.waitUntilExit()
 if smooth.terminationStatus != 0 {
     try? FileManager.default.removeItem(atPath: out)
-    fail("\(out) is jerky (motion-smoothness, above), so it was not kept")
+    fail("\(out) is jerky (motion-smoothness, above), so it was not kept", code: jerky)
 }
 
 let poster = (out as NSString).deletingPathExtension + "-poster.jpg"

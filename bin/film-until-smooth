@@ -1,0 +1,40 @@
+#!/usr/bin/env python3
+"""Make a film again while product-video refuses it as jerky, up to --tries times.
+
+    film-until-smooth -- bin/make-video --install ~/Projects/impulsearc/sunsets/video
+    film-until-smooth --tries 5 -- bin/make-video
+
+A film recorded from a simulator stutters when the Mac was busy while it drew, and
+product-video's motion-smoothness check refuses it with exit 3. The cure is a new
+recording, not a cut of the old one, so CMD must record afresh each time it runs
+(make it queue its recording with `simq run --calm`). Any other exit is returned at
+once: a broken storyboard does not get better by trying again.
+"""
+import argparse
+import subprocess
+import sys
+
+JERKY = 3
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    parser.add_argument("--tries", type=int, default=3)
+    parser.add_argument("command", nargs=argparse.REMAINDER)
+    args = parser.parse_args()
+    command = args.command[1:] if args.command[:1] == ["--"] else args.command
+    if not command:
+        parser.error("no command; usage: film-until-smooth [--tries N] -- CMD ARGS...")
+    for attempt in range(1, args.tries + 1):
+        print(f"film-until-smooth: try {attempt} of {args.tries}: {' '.join(command)}", file=sys.stderr, flush=True)
+        code = subprocess.run(command).returncode
+        if code != JERKY:
+            sys.exit(code)
+        print(f"film-until-smooth: try {attempt} was jerky", file=sys.stderr, flush=True)
+    print(f"film-until-smooth: jerky {args.tries} times; the Mac or the app is not drawing on time",
+          file=sys.stderr)
+    sys.exit(JERKY)
+
+
+if __name__ == "__main__":
+    main()

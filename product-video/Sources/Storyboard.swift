@@ -276,7 +276,11 @@ struct Timeline {
     }
 }
 
-func fail(_ text: String) -> Never {
+func fail(_ text: String, code: Int32 = 2) -> Never {
     FileHandle.standardError.write(("product-video: " + text + "\n").data(using: .utf8)!)
-    exit(2)
+    exit(code)
 }
+
+/// The exit code of a film refused as jerky: the recording stuttered, so a fresh one may
+/// not (bin/film-until-smooth records again on it). Every other failure is exit 2.
+let jerky: Int32 = 3

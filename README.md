@@ -130,6 +130,7 @@ row, so a still and a frame of the film cannot disagree about where the glass is
     bin/motion-smoothness --loop loop.mp4        # and the last frame into the first
     bin/motion-smoothness --frames out/ rec.mp4  # each fault as one PNG: the frame before beside the frame after
     bin/retime-recording recording.mp4 even.mp4 --from 32.5 --seconds 42 --fps 60
+    bin/film-until-smooth -- bin/make-video      # record again while product-video says jerky (exit 3), 3 tries
 
 `motion-smoothness` measures how far the moving part of the picture goes each
 frame (block phase correlation, `lib/motion.py`) and fails a step far from its
