@@ -72,6 +72,14 @@ on arrival, settling over 0.16 s. A linear fade reads as hesitation.
 
 Everything below is about honesty, and each one has cost somebody a re-shoot:
 
+- **Film the version people can get today.** Build from the commit of the
+  newest released build (its `ios-<version>-<build>` tag), never from `main`.
+  A film of features the store does not have yet promises what a buyer cannot
+  get.
+- **It is a real video, smooth at the display's frame rate.** A simulator
+  recording drops and repeats frames, so a scroll or a waveform judders like a
+  GIF. Record on a physical device's screen capture, and ship only a film
+  `bin/motion-smoothness film.mp4` passes.
 - **Drive the real product** through the same input path a hand uses, not a
   mockup and not a hand-held recording. Then a gesture the product does not have
   cannot appear in the film, and the film rebuilds itself when the product
