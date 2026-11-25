@@ -75,7 +75,9 @@ Everything below is about honesty, and each one has cost somebody a re-shoot:
 - **Film the version people can get today.** Build from the commit of the
   newest released build (its `ios-<version>-<build>` tag), never from `main`.
   A film of features the store does not have yet promises what a buyer cannot
-  get.
+  get. `bin/released-tree APP REPO FILM_FILES...` checks that commit out with
+  the film's test and storyboard from main; `ui-test-film` refuses any other
+  project unless `--unreleased`.
 - **It is a real video, smooth at the display's frame rate.** A simulator
   recording drops and repeats frames, so a scroll or a waveform judders like a
   GIF. Record on a physical device's screen capture, and ship only a film

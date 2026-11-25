@@ -27,6 +27,9 @@ changed, the --variant vertical film) needs no simulator:
     ui-test-film STORYBOARD --recording WORK/recording.mp4 --out film-vertical.mp4 --variant vertical
     ui-test-film STORYBOARD --recording WORK/recording.mp4 --out film.mp4 --variant phone   # for a web page
 
+A film is of the build on sale: the project must be at an ios-<version>-<build>
+tag, as the checkout released-tree makes is, unless --unreleased.
+
 Run the recording through simq: `simq run -- ui-test-film ...`.
 """
 
@@ -68,6 +71,16 @@ def on_the_beat(board):
             at = event["at"]
             if abs(at - round(at / grid) * grid) > slack:
                 fail(f"\"{event['do']}\" at {at}s is off the beat ({grid:g}s grid)")
+
+
+def released(project_dir):
+    """A film shows what a buyer downloads: the project is at an uploaded build's tag."""
+    tag = subprocess.run(["git", "-C", project_dir, "describe", "--exact-match", "--tags", "--match", "ios-*", "HEAD"],
+                         capture_output=True, text=True)
+    if tag.returncode != 0:
+        fail(f"{project_dir} is not at an ios-<version>-<build> tag, so its film would show an app nobody can "
+             f"download: film the checkout `{HERE / 'released-tree'} APP REPO` makes, or pass --unreleased")
+    say(f"filming {tag.stdout.strip()}")
 
 
 def record(storyboard, options, recording):
@@ -171,6 +184,8 @@ def main():
     parser.add_argument("--privacy", help='permissions settled before the test, so no prompt is filmed: '
                                           '"grant location com.example.App; revoke contacts com.example.App"')
     parser.add_argument("--work", type=pathlib.Path, help="where the recording and frames go")
+    parser.add_argument("--unreleased", action="store_true",
+                        help="record a project that is not the build on sale (released-tree makes that one)")
     options = parser.parse_args()
 
     storyboard = options.storyboard.resolve()
@@ -185,6 +200,8 @@ def main():
     if not options.recording:
         if not (options.project and options.scheme and options.test):
             fail("--project, --scheme and --test make the recording; or cut one with --recording")
+        if not options.unreleased:
+            released(pathlib.Path(options.project).resolve().parent)
         record(storyboard, options, recording)
     log_path = recording.with_suffix(".log")
     if not log_path.exists():

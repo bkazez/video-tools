@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# released-tree - a throwaway checkout of the build people can download today,
+# with only the film's own files taken from main. Prints its path.
+#
+#   released-tree APP REPO [PATH...]
+#   released-tree Arc ~/Projects/arc-ios UITests/ProductFilmTests.swift marketing/edit.json
+#
+# APP is what `asc released --app` takes. The checkout is a detached worktree at
+# the ios-<version>-<build> tag of the build on sale, its submodules filled from
+# REPO's own; each PATH (a file or a folder: the film's UI test, its storyboard)
+# is copied in from REPO's working tree. A film from it shows the app a buyer
+# gets. ui-test-film refuses to record a project whose HEAD has no such tag.
+#
+# Remove it after: git -C REPO worktree remove --force PATH_PRINTED
+set -euo pipefail
+[ $# -ge 2 ] || { sed -n '2,13p' "$0" >&2; exit 2; }
+app="$1"; repo="$(cd "$2" && git rev-parse --show-toplevel)"; shift 2
+
+read -r tag sha < <(~/bin/asc released --app "$app" --repo "$repo")
+tree="$(dirname "$repo")/$(basename "$repo")-$tag"
+if [ -d "$tree" ]; then
+  [ "$(git -C "$tree" rev-parse HEAD)" = "$sha" ] || { echo "released-tree: $tree is not at $tag" >&2; exit 1; }
+else
+  git -C "$repo" worktree add --detach "$tree" "$sha" >&2
+  git -C "$repo" submodule --quiet foreach 'echo "$sm_path"' | while read -r sub; do
+    git -C "$tree" submodule update --init --recursive --reference "$repo/$sub" -- "$sub" >&2
+  done
+fi
+for path in "$@"; do
+  rm -rf "${tree:?}/$path"
+  mkdir -p "$(dirname "$tree/$path")"
+  cp -R "$repo/$path" "$tree/$path"
+done
+echo "$tree"
