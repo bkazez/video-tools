@@ -213,6 +213,9 @@ struct Timeline {
     /// themselves where it is not said, which is what it always was.
     let scale: CGFloat?
     let camera: [(at: Double, to: CGFloat, seconds: Double, focus: CGPoint)]
+    /// Spans the frame source scripted, as the camera is, which the smoothness
+    /// check is not to judge: a UI-test film's app animation starting from a tap.
+    let skip: [(from: Double, to: Double)]
 
     init(path: String) {
         guard let data = FileManager.default.contents(atPath: path),
@@ -234,6 +237,10 @@ struct Timeline {
         }
         chrome = body["chrome"].flatMap { Storyboard.chrome($0) } ?? (title == nil ? nil : "macos")
         titleBand = Storyboard.number(body["titleBand"]).map { CGFloat($0) }
+        skip = (body["skip"] as? [[Any]] ?? []).compactMap { span in
+            guard span.count == 2, let from = Storyboard.number(span[0]), let to = Storyboard.number(span[1]) else { return nil }
+            return (from, to)
+        }
         camera = (body["camera"] as? [[String: Any]] ?? []).map {
             (Storyboard.number($0["at"]) ?? 0,
              CGFloat(Storyboard.number($0["to"]) ?? 1),

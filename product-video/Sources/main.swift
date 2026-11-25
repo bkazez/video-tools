@@ -317,9 +317,11 @@ run("ffmpeg", encode)
 let smooth = Process()
 smooth.executableURL = URL(fileURLWithPath: "\(ProcessInfo.processInfo.environment["PRODUCT_VIDEO_HOME"] ?? ".")/bin/motion-smoothness")
 // The camera's own moves are drawn on a curve and eased to a stop, which the check reads
-// as a freeze; it judges everything else.
+// as a freeze, and the frame source may name spans it scripted the same way (timeline
+// "skip"); it judges everything else.
 smooth.arguments = [out] + (arguments.contains("--loop") ? ["--loop"] : [])
     + timeline.camera.flatMap { ["--skip", String(format: "%.3f-%.3f", $0.at, $0.at + $0.seconds)] }
+    + timeline.skip.flatMap { ["--skip", String(format: "%.3f-%.3f", $0.from, $0.to)] }
 try? smooth.run()
 smooth.waitUntilExit()
 if smooth.terminationStatus != 0 {

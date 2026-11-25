@@ -16,7 +16,8 @@ gesture lands on its beat; at the size the device's glass will be, it
 writes the timeline -- the app's size and every camera move aimed where the
 test found its place -- and hands the frames to product-video, which does the
 bezel, the camera, the titles, the poster and the smoothness check, the same as
-for every other product.
+for every other product. The app's animation in the first 0.2 s after each touch is
+scripted like the camera, so the smoothness check skips it (timeline "skip").
 
 The recording and the test's log stay in --work, so a second cut (a title
 changed, the --variant vertical film) needs no simulator:
@@ -81,6 +82,10 @@ def record(storyboard, options, recording):
     if options.privacy:
         env["PRIVACY"] = options.privacy
     run([SIM_FILM, options.project, options.scheme, options.test, options.device, recording], env=env)
+
+
+# How long after a touch the app's own animation is starting, and is not judged.
+TOUCH_SETTLE = 0.2
 
 
 def report(log):
@@ -215,7 +220,10 @@ def main():
     canvas = {"width": places["canvas"]["width"] / scale, "height": places["canvas"]["height"] / scale}
     timeline = {"fps": fps, "frames": count, "width": log["width"], "height": log["height"],
                 "scale": scale, "canvas": canvas, "chrome": board.get(options.variant or "", {}).get(
-                    "chrome", board.get("chrome")), "camera": camera(board, log)}
+                    "chrome", board.get("chrome")), "camera": camera(board, log),
+                # The app's animation starting from a tap is scripted, as the camera is: a
+                # steep start right after a touch is the app's own curve, not a stall.
+                "skip": [[g["touch"], g["touch"] + TOUCH_SETTLE] for g in log.get("gestures", [])]}
     (frames / "timeline.json").write_text(json.dumps(timeline, indent=2))
 
     say("putting the film on it")
