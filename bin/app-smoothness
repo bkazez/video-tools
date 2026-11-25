@@ -73,7 +73,7 @@ def project_for(test):
     for folder in test.parents:
         if (folder / "project.yml").exists() and \
                 not output(["git", "-C", folder, "ls-files", "*.xcodeproj/project.pbxproj"]).strip():
-            run(["xcodegen", "generate", "--quiet", "--spec", folder / "project.yml"])
+            run(["xcodegen", "generate", "--quiet", "--spec", folder / "project.yml"], capture_output=True)
         projects = list(folder.glob("*.xcodeproj"))
         if len(projects) == 1:
             return projects[0]
@@ -114,7 +114,10 @@ def scheme_for(project, target):
 
 def record(root, work):
     test = test_file(root)
-    project = project_for(test)
+    try:
+        project = project_for(test)
+    except subprocess.CalledProcessError as error:
+        raise NotRecorded(f"{' '.join(map(str, error.cmd))} failed in a fresh clone:\n{error.stderr or ''}")
     target = target_for(project, test)
     scheme = scheme_for(project, target)
     recording = work / "recording.mp4"
@@ -126,8 +129,25 @@ def record(root, work):
                               cwd=project.parent, env=env, stdout=out, stderr=subprocess.STDOUT)
     if made.returncode:
         said = [line for line in log.read_text().splitlines() if "DVTDeveloperAccount" not in line]
-        raise NotRecorded("\n".join(said[-25:]))
+        raise NotRecorded("\n".join(failures(recording.with_suffix(".xcresult")) + said[-12:]))
     return recording
+
+
+def failures(result):
+    """The test's own failure messages, from its result bundle."""
+    if not result.exists():
+        return []
+    found = []
+
+    def walk(node):
+        if node.get("nodeType") == "Failure Message":
+            found.append(node["name"].splitlines()[0])
+        for child in node.get("children", []):
+            walk(child)
+    for node in json.loads(output(["xcrun", "xcresulttool", "get", "test-results", "tests", "--path", result])
+                           ).get("testNodes", []):
+        walk(node)
+    return found
 
 
 class NotRecorded(Exception):
