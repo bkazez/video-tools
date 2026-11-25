@@ -106,6 +106,13 @@ def main():
         check("a picture that changes every fourth frame has no holds", " 0 holds" in done.stdout + done.stderr,
               (done.stdout + done.stderr).strip()[-200:])
 
+        # A drawer sliding up from rest on a curve that starts steep, as iOS animations do:
+        # the first step is the biggest, with nothing moving before it to judge it against.
+        onset = tmp / "onset.mp4"
+        write(onset, [0.0] * 30 + [60 * (1 - (1 - n / 24) ** 3) for n in range(25)] + [60.0] * 30)
+        code, said = judge(onset)
+        check("motion starting steeply from rest is smooth", code == 0, said)
+
         # The simulator: holds a picture for 5 frames, then jumps to where it should be.
         stall = tmp / "stall.mp4"
         positions = [speed * (n - (n % 6 if 60 <= n < 120 else 0)) for n in range(frames)]

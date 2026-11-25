@@ -29,6 +29,7 @@ over all the blocks flips between them from frame to frame.
 A picture that is not moving, or barely, is not judged: a still is not a stall.
 Barely is under half an analysis pixel a frame (about a pixel of a 1080p film):
 a hitch that small cannot be seen.
+Nor are the frames beside a rest of REST seconds, where motion starts or settles.
 Nor is a span given with --skip: product-video passes its own camera moves, which
 it draws on a curve, since a move eased to a stop slows by twice a frame as it
 lands and would read as a freeze or a jump.
@@ -55,6 +56,7 @@ JUMP = 1.6
 CADENCE = 0.1
 NEAR = 0.05              # seconds either side that are a step's neighbours
 STILL = 0.5              # a local median under this many analysis pixels a frame is a still
+REST = 0.25              # seconds the picture stands still to be at rest, not stalled
 LAYER = 0.25             # under this share of the blocks moving, details are changing (digits, a title landing), not the picture moving
 HELD = 0.03              # mean grey levels a frame differs from the last by, at most, to repeat it
 CHANGED = 0.1            # mean grey levels a frame differs from the last by, at least, to change
@@ -145,6 +147,19 @@ def holds(path, fps):
     return [(i, run) for i, run in runs if alike(i, run)]
 
 
+def beside_rest(moves, reach, fps):
+    """Frames within REACH of a rest of REST seconds or more. Motion that starts from
+    rest, or settles into it, has no motion on one side to be judged against: a curve
+    that starts steep, as an iOS animation does, is not a freeze and then a jump."""
+    near = np.zeros(len(moves), dtype=bool)
+    edges = np.flatnonzero(np.diff(np.r_[0, (~moves).astype(int), 0]))
+    for start, end in zip(edges[::2], edges[1::2]):
+        if end - start >= max(1, int(round(REST * fps))):
+            for edge in (start, end):
+                near[max(0, edge - reach):min(len(moves), edge + reach)] = True
+    return near
+
+
 def judge(steps, same, fps, skip=(), times=None):
     """Each frame's step, its neighbours', their ratio, whether it was judged, the faults
     and the spread, from every block's step (frames x blocks)."""
@@ -160,7 +175,8 @@ def judge(steps, same, fps, skip=(), times=None):
                 local[i] = np.nanmedian(steps[around], axis=0)
     moving = (np.nan_to_num(local) > STILL) & ~np.isnan(steps)
     layer = moving.sum(axis=1) >= max(1, LAYER * steps.shape[1])
-    judged = same & layer
+    own = ((np.nan_to_num(steps) > STILL).sum(axis=1) >= max(1, LAYER * steps.shape[1])) | ~same
+    judged = same & layer & ~beside_rest(own, reach, fps)
     for start, end in skip:
         judged &= ~((times[:count] >= start - NEAR) & (times[:count] <= end + NEAR))
     ratio, step, around = np.ones(count), np.median(np.nan_to_num(steps), axis=1), np.median(np.nan_to_num(local), axis=1)
