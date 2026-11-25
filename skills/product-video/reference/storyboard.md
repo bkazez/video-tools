@@ -35,6 +35,7 @@ storyboard. Read those before writing a second one.
 | `phone` | built in, for a web page that stands the phone beside its own words: the bezel on black, the canvas the bezel's own shape, no titles and no camera moves (`ui-test-film --variant phone`). A storyboard's own `phone` block replaces it. Any variant block may also say `"canvas": "device"`, `"words": false`, `"camera": false`, `"background"` and `"device_fill"` |
 | `target_lufs` | where the finished sound is aimed; -18 for a landing page |
 | `poster_at` | which second becomes the still |
+| `before` | `["search SFO to ORD", "open UA 2296"]` — gestures played unfilmed before the recording rolls, so the film opens on the product's most arresting moment rather than its first screen (Filming's `playFilm`, which waits its `settle` seconds after them) |
 
 ## Events
 
@@ -117,7 +118,7 @@ identifier, or a label), once it has stopped sliding:
 ```swift
 import Filming
 
-try playFilm(in: app, lead: { _ in 0.3 }) { step in   // a press lands as it lifts
+try playFilm(in: app, settle: 8, lead: { _ in 0.3 }) { step in   // a press lands as it lifts
     switch step {
     case "back": pressByHand(app.buttons["back"], after: 0)
     default: XCTFail("no gesture \"\(step)\"")
