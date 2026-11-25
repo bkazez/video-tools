@@ -100,6 +100,22 @@ def main():
                               capture_output=True, text=True)
         check("a camera move it is told to skip is not judged", done.returncode == 0, done.stderr.strip()[-200:])
 
+        # Steps uneven by a fifth, in fours as a beat between two clocks makes them: for two seconds a cadence
+        # that fails; for a third of a second, as a UI animation settles, too few to be one.
+        def uneven(moving):
+            places, at = [0.0] * 30, 0.0
+            for n in range(moving):
+                at += 2 * speed * (1.2, 1.05, 0.95, 0.8)[n % 4]
+                places.append(at)
+            return places + [at] * 30
+        long, brief = tmp / "uneven-long.mp4", tmp / "uneven-brief.mp4"
+        write(long, uneven(120))
+        write(brief, uneven(20))
+        code, said = judge(long)
+        check("two seconds of uneven steps are jerky", code == 1 and " 0 freezes, 0 jumps, 0 holds" in said, said)
+        code, said = judge(brief)
+        check("a third of a second of them is not judged for cadence", code == 0, said)
+
         # A slow map drawn at half the frame rate: each picture twice. Its steps are too
         # small for the phase correlation to judge, but every other frame is a repeat.
         halved = tmp / "halved.mp4"

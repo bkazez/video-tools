@@ -20,7 +20,9 @@ over all the blocks flips between them from frame to frame.
 
   freeze   a step under FREEZE x its neighbours', between moving frames
   jump     a step over JUMP x its neighbours'
-  cadence  the steps' spread, median |step / neighbours' - 1|, over CADENCE
+  cadence  the steps' spread, median |step / neighbours' - 1|, over CADENCE, where at
+           least a second of frames is judged: an eased curve alone, as a UI animation
+           settling, spreads 0.10 to 0.13 with no fault in it, and is a cadence of nothing
   hold     a frame that repeats the one before, with the picture changing on most
            frames on both sides of it, and alike just before and just after: a slow picture drawn at half the frame rate,
            or a map that stops drawing for a few frames, which is too small a step
@@ -246,7 +248,8 @@ def main():
                           "jumps": jumps, "faults": sorted(listed, key=lambda f: f["at"])}))
     summary = (f"{args.video}: {len(steps)} steps, {int(judged.sum())} moving, {cuts} cuts; median step "
                f"{np.median(steps[judged]) if judged.any() else 0:.2f} px; spread {spread:.3f} "
-               f"(limit {CADENCE}); {freezes} freezes, {jumps} jumps, {len(stalls)} holds")
+               f"(limit {CADENCE}{'' if judged.sum() >= fps else ', under a second judged'}); "
+               f"{freezes} freezes, {jumps} jumps, {len(stalls)} holds")
     worst = sorted(faults, key=lambda f: -abs(np.log(max(ratio[f[1]], 1e-3))))[:args.worst]
     if args.frames:
         os.makedirs(args.frames, exist_ok=True)
@@ -266,7 +269,7 @@ def main():
             out = os.path.join(args.frames, f"{when:07.2f}s-hold.png")
             picture(args.video, times[i], times[i + 1], out)
             print(f"    {out}", file=sys.stderr)
-    if faults or stalls or spread > CADENCE:
+    if faults or stalls or (spread > CADENCE and judged.sum() >= fps):
         print("motion-smoothness: JERKY " + summary, file=sys.stderr)
         sys.exit(1)
     print("motion-smoothness: smooth " + summary, file=sys.stderr if args.json else sys.stdout)

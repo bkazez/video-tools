@@ -18,7 +18,7 @@ test found its place -- and hands the frames to product-video, which does the
 bezel, the camera, the titles, the poster and the smoothness check, the same as
 for every other product. An app that runs sideways says so with a storyboard
 wider than tall: its upright recording is turned a quarter left, as the bezel is.
-The app's animation in the first second after each touch is
+The app's animation in the first 0.6 s after each touch is
 scripted like the camera, so the smoothness check skips it (timeline "skip").
 
 The recording and the test's log stay in --work, so a second cut (a title
@@ -115,10 +115,9 @@ def record(storyboard, options, recording):
     run([SIM_FILM, options.project, options.scheme, options.test, options.device, recording], env=env)
 
 
-# How long after a touch the app's own animation runs (FlightTrack's drawer swap is 0.5 s, its
-# Back to the list 0.95 s in a film slowed 16 times): its eased steps are not judged for
-# freezes, jumps or cadence. A hold, a real stall, still is.
-TOUCH_SETTLE = 1.0
+# How long after a touch the app's own animation runs (FlightTrack's drawer swap is 0.5 s): its
+# eased steps are not judged for freezes, jumps or cadence. A hold, a real stall, still is.
+TOUCH_SETTLE = 0.6
 
 
 def report(log):
