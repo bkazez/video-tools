@@ -238,13 +238,19 @@ def main():
     # The simulator records a frame only when the screen changes, so each stretch is
     # evened to the film's rate first (N times it for a stretch the app slowed N
     # times), then played back at the film's speed.
+    # It records nothing at all after the screen's last change, so a film that ends on
+    # a still screen finds the recording short by that stillness: its last frame, held.
+    end = log["zero"] + max(start + length * slow for start, length, slow in pieces)
+    duration = float(run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0",
+                          recording], capture_output=True).stdout.strip() or 0)
+    still = max(0.0, end - duration) + 1
     copies = "".join(f"[e{i}]" for i in range(len(pieces)))
     trims = "".join(f"[e{i}]fps={fps * slow:g},trim=start={log['zero'] + start:.3f}:duration={length * slow:.3f},"
                     f"setpts=(PTS-STARTPTS)/{slow:g}[s{i}];"
                     for i, (start, length, slow) in enumerate(pieces))
     joined = "".join(f"[s{i}]" for i in range(len(pieces)))
     run(["ffmpeg", "-v", "error", "-i", recording, "-filter_complex",
-         f"[0:v]split={len(pieces)}{copies};{trims}{joined}concat=n={len(pieces)}:v=1:a=0,fps={fps},"
+         f"[0:v]tpad=stop_mode=clone:stop_duration={still:.3f},split={len(pieces)}{copies};{trims}{joined}concat=n={len(pieces)}:v=1:a=0,fps={fps},"
          # Each stretch rounds down to whole frames; the last frame is held for those.
          f"tpad=stop_mode=clone:stop_duration={len(pieces) / fps:.3f},"
          + ("transpose=cclock," if turned else "") +
