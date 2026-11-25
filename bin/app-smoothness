@@ -224,7 +224,8 @@ def judge(name, recording, frames=None):
 CI_REPOS = pathlib.Path.home() / ".config/ci-runners/repos"
 CACHE = pathlib.Path.home() / ".cache/app-smoothness"
 LABEL = "app-smoothness"
-TITLE = "Animations stutter on the iPhone (app-smoothness)"
+TITLES = {"failure": "Animations stutter on the iPhone (app-smoothness)",
+          "error": f"{TEST_CLASS} does not play to its end on the iPhone (app-smoothness)"}
 
 
 def gh(*argv, check=True):
@@ -250,7 +251,7 @@ def checkout(repo):
 def report(repo, sha, verdict):
     """A red or green app-smoothness status on the commit, and one open issue per app
     while it stutters or its demo test will not play on the phone: opened, kept up to
-    date, closed once a run is smooth. VERDICT is judge()'s, or {"error": what it said}."""
+    date (its title says which), closed once a run is smooth. VERDICT is judge()'s, or {"error": what it said}."""
     if "error" in verdict:
         state, headline = "error", f"{TEST_CLASS} did not play to its end on the iPhone"
         body = (f"`app-smoothness` could not record `{TEST_CLASS}` on the homebase iPhone at {sha[:7]}, so "
@@ -274,9 +275,9 @@ def report(repo, sha, verdict):
         for issue in found:
             gh("issue", "close", issue["number"], "-R", repo, "--comment", f"Smooth at {sha[:7]}: {headline}")
     elif found:
-        gh("issue", "edit", found[0]["number"], "-R", repo, "--body", body)
+        gh("issue", "edit", found[0]["number"], "-R", repo, "--title", TITLES[state], "--body", body)
     else:
-        gh("issue", "create", "-R", repo, "--title", TITLE, "--label", LABEL, "--body", body)
+        gh("issue", "create", "-R", repo, "--title", TITLES[state], "--label", LABEL, "--body", body)
 
 
 def every_app():
