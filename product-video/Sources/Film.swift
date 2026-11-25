@@ -73,6 +73,44 @@ enum Film {
         let screen: NSRect          // within the bezel image, top-left origin
         let radius: CGFloat
         var size: NSSize { bezel.size }
+
+        /// A quarter turn to the left: the bezel's top edge becomes its left.
+        func turned() -> Device {
+            let wide = Int(size.height), tall = Int(size.width)
+            guard let rep = NSBitmapImageRep(
+                bitmapDataPlanes: nil, pixelsWide: wide, pixelsHigh: tall,
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
+                  let context = NSGraphicsContext(bitmapImageRep: rep) else {
+                fail("could not turn the bezel")
+            }
+            rep.size = NSSize(width: wide, height: tall)
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = context
+            let turn = NSAffineTransform()
+            turn.translateX(by: CGFloat(wide), yBy: 0)
+            turn.rotate(byDegrees: 90)
+            turn.concat()
+            bezel.draw(in: NSRect(origin: .zero, size: size))
+            NSGraphicsContext.restoreGraphicsState()
+            let image = NSImage(size: rep.size)
+            image.addRepresentation(rep)
+            // Top-left origin: the hole's top edge is now its left, and its right
+            // edge, counted from the old left, is now its top counted from the old width.
+            return Device(bezel: image,
+                          screen: NSRect(x: screen.minY, y: size.width - screen.maxX,
+                                         width: screen.height, height: screen.width),
+                          radius: radius)
+        }
+    }
+
+    /// The bezel a product of SIZE stands in: a product wider than tall (an app
+    /// that runs sideways) gets the phone turned a quarter left, the Dynamic
+    /// Island on the left, which is how iOS holds a phone in landscape and how
+    /// ui-test-film turns a recording to match.
+    static func device(_ name: String, for size: CGSize) -> Device {
+        let upright = device(name)
+        return (size.width > size.height) == (upright.screen.width > upright.screen.height) ? upright : upright.turned()
     }
 
     static func device(_ name: String) -> Device {

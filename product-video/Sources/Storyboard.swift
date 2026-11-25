@@ -89,7 +89,7 @@ struct Storyboard {
             let raw = block.keys.contains("canvas") ? block["canvas"] : board["canvas"]
             if raw as? String == "device" {
                 guard let chrome, chrome != "macos" else { fail("canvas \"device\" needs a device chrome") }
-                let device = Film.device(chrome)
+                let device = Film.device(chrome, for: size)
                 let points = size.height / device.screen.height / fill
                 return CGSize(width: (device.size.width * points).rounded(), height: (device.size.height * points).rounded())
             }

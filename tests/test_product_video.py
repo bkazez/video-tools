@@ -215,6 +215,45 @@ def the_phone_alone(tmp):
     check("and no card covers the glass", middle[1] > 180, str(middle))
 
 
+def turned_sideways(tmp):
+    """A product wider than tall stands in the bezel turned a quarter left: an app that runs sideways."""
+    from PIL import Image
+    room = tmp / "sideways"
+    frames = room / "frames"
+    frames.mkdir(parents=True, exist_ok=True)
+    board = storyboard(tmp, width=239, height=110, scale=2, chrome="iphone-16-pro-max",
+                       canvas={"width": 480, "height": 270}, background="#03070F")
+    places = json.loads(run([str(board), "--layout", "--variant", "phone"]).stdout)
+    canvas, glass = places["canvas"], places["screen"]
+    check("a wide product's phone cut is the bezel lying down",
+          canvas["width"] > 1.8 * canvas["height"] and glass["width"] > 0.9 * canvas["width"]
+          and abs(glass["width"] / glass["height"] - 239 / 110) < 0.02, json.dumps(places))
+    for index in range(FRAMES):
+        Image.new("RGB", (glass["width"], glass["height"]), (0, 200, 0)).save(frames / f"{index:05d}.png")
+    (frames / "timeline.json").write_text(json.dumps({
+        "fps": FPS, "frames": FRAMES, "width": 239, "height": 110, "scale": 2,
+        "canvas": {"width": canvas["width"] / 2, "height": canvas["height"] / 2},
+        "chrome": "iphone-16-pro-max", "camera": [],
+    }))
+    out = room / "film.mp4"
+    done = run([str(board), "--frames", str(frames), "--out", str(out),
+                "--width", str(canvas["width"]), "--variant", "phone"])
+    check("and becomes a film", done.returncode == 0 and out.exists(), done.stderr.strip() or "no file")
+    if not out.exists():
+        return
+    first = Image.open(sorted((frames / "dressed").glob("*.png"))[0]).convert("RGB")
+    middle = first.getpixel((glass["x"] + glass["width"] // 2, glass["y"] + glass["height"] // 2))
+    check("with the product filling its glass", middle[1] > 180, str(middle))
+    # The Dynamic Island is black on the green glass, near the left edge, and nothing like it on the right.
+    row = glass["y"] + glass["height"] // 2
+    def darkest(x0, x1):
+        return min(sum(first.getpixel((x, row))) for x in range(x0, x1))
+    near, far = glass["width"] // 50, glass["width"] // 8
+    left = darkest(glass["x"] + near, glass["x"] + far)
+    right = darkest(glass["x"] + glass["width"] - far, glass["x"] + glass["width"] - near)
+    check("the Dynamic Island is on the left", left < 60 and right > 150, f"left {left}, right {right}")
+
+
 def refusing(tmp):
     """The film's own rule: what a viewer reads lands on the beat."""
     board = storyboard(tmp, events=[{"at": 0.0, "card": "on", "seconds": 0.4},
@@ -243,6 +282,7 @@ def main():
     dressing(tmp)
     standing_in_a_room(tmp)
     the_phone_alone(tmp)
+    turned_sideways(tmp)
     refusing(tmp)
 
     if failures:

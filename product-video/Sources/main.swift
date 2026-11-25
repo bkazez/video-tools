@@ -71,7 +71,7 @@ func layout(canvas: CGSize?, product: CGSize, chrome: String?)
                          width: product.width, height: product.height)
         return (frame, box, nil)
     }
-    let device = Film.device(chrome)
+    let device = Film.device(chrome, for: product)
     let stood = Film.stand(device, in: frame, fill: shape.deviceFill)
     return (frame, stood.screen, (device, stood.bezel))
 }

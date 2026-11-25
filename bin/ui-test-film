@@ -16,7 +16,9 @@ gesture lands on its beat; at the size the device's glass will be, it
 writes the timeline -- the app's size and every camera move aimed where the
 test found its place -- and hands the frames to product-video, which does the
 bezel, the camera, the titles, the poster and the smoothness check, the same as
-for every other product. The app's animation in the first 0.6 s after each touch is
+for every other product. An app that runs sideways says so with a storyboard
+wider than tall: its upright recording is turned a quarter left, as the bezel is.
+The app's animation in the first 0.6 s after each touch is
 scripted like the camera, so the smoothness check skips it (timeline "skip").
 
 The recording and the test's log stay in --work, so a second cut (a title
@@ -118,6 +120,14 @@ def camera(board, log):
     return out
 
 
+def sideways(log):
+    """The test's log as the turned picture sees it: the app's size the other way
+    round, and every camera place a quarter turn left, top-left origin."""
+    width = log["width"]
+    return {**log, "width": log["height"], "height": width,
+            "camera": [{**move, "x": move["y"], "y": width - move["x"]} for move in log.get("camera", [])]}
+
+
 def segments(log, seconds, slow=1.0):
     """The film as stretches of the recording, each starting at a gesture's touch.
 
@@ -194,7 +204,13 @@ def main():
 
     shot = run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height",
                 "-of", "csv=p=0", recording], capture_output=True).stdout.strip().split(",")
-    if abs(int(shot[0]) / int(shot[1]) - screen["width"] / screen["height"]) > 0.01:
+    # A sideways app is recorded upright, as the simulator holds the phone; the bezel
+    # stands turned a quarter left (product-video), so the recording turns with it.
+    turned = abs(int(shot[1]) / int(shot[0]) - screen["width"] / screen["height"]) <= 0.01 \
+        and screen["width"] > screen["height"]
+    if turned:
+        log = sideways(log)
+    elif abs(int(shot[0]) / int(shot[1]) - screen["width"] / screen["height"]) > 0.01:
         fail(f"the recording is {shot[0]}x{shot[1]}, not the shape of the {board.get('chrome')} bezel's screen "
              f"({screen['width']}x{screen['height']}): record on that phone, or name its bezel in the storyboard")
     pieces = segments(log, seconds, board.get("slow", 1.0))
@@ -214,6 +230,7 @@ def main():
          f"[0:v]split={len(pieces)}{copies};{trims}{joined}concat=n={len(pieces)}:v=1:a=0,fps={fps},"
          # Each stretch rounds down to whole frames; the last frame is held for those.
          f"tpad=stop_mode=clone:stop_duration={len(pieces) / fps:.3f},"
+         + ("transpose=cclock," if turned else "") +
          f"scale={screen['width']}:{screen['height']}:flags=lanczos[out]",
          "-map", "[out]", "-frames:v", count, "-start_number", 0, frames / "%05d.png"])
     made = len(list(frames.glob("*.png")))

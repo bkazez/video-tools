@@ -27,7 +27,7 @@ storyboard. Read those before writing a second one.
 | `width`/`height` | the product's own drawing area, in points, before `chrome` |
 | `scale` | render at this multiple for a crisp master; 2 is right |
 | `beat` / `subdivide` | the grid every title, sound and keystroke lands on; 8 lets a run of keystrokes accelerate from quarters to thirty-seconds and stay in tempo |
-| `chrome` | `"macos"` for the platform's window, or a device `bin/device-frame --list` knows (`"iphone-16-pro-max"`) for a bezel. `true` still means the platform's window |
+| `chrome` | `"macos"` for the platform's window, or a device `bin/device-frame --list` knows (`"iphone-16-pro-max"`) for a bezel. `true` still means the platform's window. A product wider than tall (`"width": 956, "height": 440`, an app that runs sideways) stands in the bezel turned a quarter left, Dynamic Island on the left, and `ui-test-film` turns the simulator's upright recording to match |
 | `canvas` | `{"width": …, "height": …}` — the film's frame, when it is bigger than the product. A phone stands in a room; the room is the rest of the canvas. Omit it and the product is the picture, which is what a window-filling product wants |
 | `device_fill` | how much of the canvas a bezel stands in, 0.72 by default to leave room for titles; a film with no words gives it 0.94 |
 | `background` | `"#03070F"` — the canvas behind the product where there is no `--backdrop` |
