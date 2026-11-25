@@ -179,9 +179,29 @@ def segments(log, seconds, slow=1.0):
     return out
 
 
+def bezel(recording):
+    """The bezel of the phone a recording was made on, read from the test result device-demo keeps beside it.
+
+    The app draws to its own phone's glass: an edge stroke follows that phone's corners and the status bar is
+    laid out for its notch or island, so in any other phone's bezel the corners run under the frame."""
+    result = recording.with_suffix(".xcresult")
+    if not result.exists():
+        return []
+    summary = json.loads(run(["xcrun", "xcresulttool", "get", "test-results", "summary", "--path", result],
+                             capture_output=True).stdout)
+    model = summary["devicesAndConfigurations"][0]["device"]["modelName"]
+    name = model.lower().replace(" ", "-")
+    if subprocess.run([HERE / "device-frame", name, "--json"], capture_output=True).returncode:
+        fail(f"the recording was made on an {model}, and device-frame has no bezel for it: add its row "
+             f"(bin/device-frame), so the screen stands in the phone that drew it")
+    say(f"recorded on an {model}: standing it in that phone's bezel")
+    return ["--bezel", name]
+
+
 def cut(storyboard, board, log, recording, variant, out, work):
     """One cut of the film (a variant, or the storyboard's own shape when None) from the recording, at `out`."""
-    layout_argv = [COMPOSITOR, storyboard, "--layout"] + (["--variant", variant] if variant else [])
+    phone = bezel(recording)
+    layout_argv = [COMPOSITOR, storyboard, "--layout"] + (["--variant", variant] if variant else []) + phone
     places = json.loads(run(layout_argv, capture_output=True).stdout)
     screen, scale = places["screen"], places["scale"]
     fps = board.get("fps", 30)
@@ -197,7 +217,7 @@ def cut(storyboard, board, log, recording, variant, out, work):
     if turned:
         log = sideways(log)
     elif abs(int(shot[0]) / int(shot[1]) - screen["width"] / screen["height"]) > 0.01:
-        fail(f"the recording is {shot[0]}x{shot[1]}, not the shape of the {board.get('chrome')} bezel's screen "
+        fail(f"the recording is {shot[0]}x{shot[1]}, not the shape of the {places['chrome']} bezel's screen "
              f"({screen['width']}x{screen['height']}): record on that phone, or name its bezel in the storyboard")
     pieces = segments(log, seconds, board.get("slow", 1.0))
     say(f"cutting {seconds:g}s from {len(pieces)} stretches of the recording")
@@ -241,7 +261,7 @@ def cut(storyboard, board, log, recording, variant, out, work):
     say("putting the film on it")
     run([COMPOSITOR, storyboard, "--frames", frames, "--out", out,
          "--width", places["canvas"]["width"], "--poster-at", board.get("poster_at", 3)]
-        + (["--variant", variant] if variant else []))
+        + (["--variant", variant] if variant else []) + phone)
     say(f"{out}; the recording is {recording}")
 
 

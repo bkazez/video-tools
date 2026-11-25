@@ -14,10 +14,16 @@ struct Storyboard {
     let events: [[String: Any]]
     private let board: [String: Any]
 
-    init(path: String) {
-        guard let data = FileManager.default.contents(atPath: path),
-              let board = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+    /// `bezel` names the device the frames were recorded on, in place of the
+    /// storyboard's: a screen stands in the bezel of the phone that drew it, or
+    /// its corners and notch do not meet the glass.
+    init(path: String, bezel: String? = nil) {
+        guard var board = (FileManager.default.contents(atPath: path))
+                .flatMap({ try? JSONSerialization.jsonObject(with: $0) }) as? [String: Any] else {
             fail("could not read the storyboard \(path)")
+        }
+        if let bezel, let named = board["chrome"].flatMap(Storyboard.chrome), named != "macos" {
+            board["chrome"] = bezel
         }
         self.board = board
         seconds = Storyboard.number(board["seconds"]) ?? 30

@@ -8,8 +8,9 @@
 #
 #   product-video storyboard.json --frames DIR --out film.mp4 [--audio a.wav]
 #                 [--backdrop DIR] [--gain-db X] [--width 1920] [--poster-at 4] [--loop]
+#                 [--bezel DEVICE]   the device the frames were recorded on, for the storyboard's
 #   product-video storyboard.json --check
-#   product-video storyboard.json --layout [--vertical]
+#   product-video storyboard.json --layout [--vertical] [--bezel DEVICE]
 #
 # What draws the frames is per product and lives with that product; what this
 # does is everything that is film rather than product. The contract is
@@ -23,7 +24,7 @@ SOURCES="$HERE/product-video/Sources"
 BINARY="$HERE/product-video/.build/product-video"
 
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
-    sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'
     exit 0
 fi
 

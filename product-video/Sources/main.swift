@@ -39,7 +39,7 @@ func number(_ name: String, _ fallback: Double) -> Double {
 guard arguments.count > 1, !arguments[1].hasPrefix("-") else {
     fail("usage: product-video storyboard.json --frames DIR --out film.mp4 [--audio a.wav]")
 }
-let storyboard = Storyboard(path: arguments[1])
+let storyboard = Storyboard(path: arguments[1], bezel: text("--bezel"))
 storyboard.checkBeat()
 storyboard.checkWords()
 

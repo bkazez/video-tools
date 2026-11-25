@@ -216,6 +216,21 @@ def the_phone_alone(tmp):
     check("and no card covers the glass", middle[1] > 180, str(middle))
 
 
+def in_the_phone_that_drew_it(tmp):
+    """--bezel stands the screen in the phone it was recorded on, whatever bezel the storyboard names."""
+    board = storyboard(tmp, width=110, height=239, scale=2, chrome="iphone-16-pro-max",
+                       canvas={"width": 480, "height": 270}, background="#03070F")
+    named = json.loads(run([str(board), "--layout", "--variant", "phone"]).stdout)
+    mini = json.loads(run([str(board), "--layout", "--variant", "phone", "--bezel", "iphone-12-mini"]).stdout)
+    check("--bezel replaces the storyboard's phone", mini["chrome"] == "iphone-12-mini"
+          and named["chrome"] == "iphone-16-pro-max", f"{named['chrome']} then {mini['chrome']}")
+    shape = lambda places: places["canvas"]["width"] / places["canvas"]["height"]
+    check("and the cut takes that phone's shape", abs(shape(mini) - 1220 / 2458) < 0.01
+          and abs(shape(named) - 1470 / 3000) < 0.01, f"{shape(named):.4f} then {shape(mini):.4f}")
+    preview = json.loads(run([str(board), "--layout", "--variant", "preview", "--bezel", "iphone-12-mini"]).stdout)
+    check("a cut with no bezel keeps none", preview["chrome"] is None, json.dumps(preview))
+
+
 def every_cut(tmp):
     """Every device film has the same built-in cuts, each the size its Marcom asset type wants."""
     board = storyboard(tmp, width=440, height=956, scale=2, chrome="iphone-16-pro-max",
@@ -307,6 +322,7 @@ def main():
     dressing(tmp)
     standing_in_a_room(tmp)
     the_phone_alone(tmp)
+    in_the_phone_that_drew_it(tmp)
     every_cut(tmp)
     turned_sideways(tmp)
     refusing(tmp)
