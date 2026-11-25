@@ -32,6 +32,7 @@ storyboard. Read those before writing a second one.
 | `device_fill` | how much of the canvas a bezel stands in, 0.72 by default to leave room for titles; a film with no words gives it 0.94 |
 | `background` | `"#03070F"` — the canvas behind the product where there is no `--backdrop` |
 | `vertical` | the same film redrawn in this shape, for a phone; it overrides any of the keys above |
+| `phone` | built in, for a web page that stands the phone beside its own words: the bezel on black, the canvas the bezel's own shape, no titles and no camera moves (`ui-test-film --variant phone`). A storyboard's own `phone` block replaces it. Any variant block may also say `"canvas": "device"`, `"words": false`, `"camera": false`, `"background"` and `"device_fill"` |
 | `target_lufs` | where the finished sound is aimed; -18 for a landing page |
 | `poster_at` | which second becomes the still |
 

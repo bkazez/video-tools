@@ -3,7 +3,11 @@
 //     product-video storyboard.json --frames DIR --out film.mp4 [--audio a.wav]
 //                   [--backdrop DIR] [--gain-db X] [--width 1920] [--poster-at 4] [--loop]
 //     product-video storyboard.json --check          the storyboard alone
-//     product-video storyboard.json --layout [--vertical]   where the device goes
+//     product-video storyboard.json --layout [--variant NAME]   where the device goes
+//
+// `--variant NAME` cuts the storyboard's named block (`vertical`, or the
+// built-in `phone`: the phone alone on black, no words, no camera), for the
+// layout and the film alike.
 //
 // The division of labour, which is the whole reason this exists:
 //
@@ -38,6 +42,9 @@ guard arguments.count > 1, !arguments[1].hasPrefix("-") else {
 let storyboard = Storyboard(path: arguments[1])
 storyboard.checkBeat()
 
+/// The shape this run cuts: the storyboard's own, or the variant named.
+let shape = storyboard.geometry(variant: text("--variant") ?? (arguments.contains("--vertical") ? "vertical" : nil))
+
 if arguments.contains("--check") {
     print("the storyboard reads, and every title lands on the beat")
     exit(0)
@@ -65,12 +72,11 @@ func layout(canvas: CGSize?, product: CGSize, chrome: String?)
         return (frame, box, nil)
     }
     let device = Film.device(chrome)
-    let stood = Film.stand(device, in: frame, fill: storyboard.deviceFill)
+    let stood = Film.stand(device, in: frame, fill: shape.deviceFill)
     return (frame, stood.screen, (device, stood.bezel))
 }
 
 if arguments.contains("--layout") {
-    let shape = storyboard.geometry(variant: text("--variant") ?? (arguments.contains("--vertical") ? "vertical" : nil))
     let places = layout(canvas: shape.canvas, product: shape.size, chrome: shape.chrome)
     // In master pixels, which is what an ffmpeg crop wants.
     func pixels(_ box: NSRect) -> [String: Int] {
@@ -85,6 +91,7 @@ if arguments.contains("--layout") {
         "canvas": ["width": Int((places.canvas.width * shape.scale).rounded()),
                    "height": Int((places.canvas.height * shape.scale).rounded())],
         "screen": pixels(places.product),
+        "camera": shape.camera,
     ]
     let data = try! JSONSerialization.data(withJSONObject: said, options: [.sortedKeys])
     print(String(data: data, encoding: .utf8)!)
@@ -95,7 +102,8 @@ guard let frames = text("--frames"), let out = text("--out") else {
     fail("--frames DIR and --out FILM.mp4 are both needed")
 }
 let timeline = Timeline(path: "\(frames)/timeline.json")
-let titles = storyboard.titles()
+let titles = shape.words ? storyboard.titles() : Storyboard.Titles()
+let moves = shape.camera ? timeline.camera : []
 let places = layout(canvas: timeline.canvas,
                     product: CGSize(width: timeline.width, height: timeline.height),
                     chrome: timeline.chrome)
@@ -124,7 +132,7 @@ try? FileManager.default.createDirectory(atPath: dressed, withIntermediateDirect
 /// How far into a camera move we are, and how far it is going.
 func camera(at time: Double) -> (scale: CGFloat, target: CGFloat, focus: CGPoint)? {
     var state: (scale: CGFloat, target: CGFloat, focus: CGPoint)?
-    for move in timeline.camera where move.at <= time {
+    for move in moves where move.at <= time {
         let done = min(1, max(0, (time - move.at) / max(move.seconds, 0.001)))
         // Cubic ease in and out, and the SAME eased fraction drives all three axes -- the two
         // the camera pans across and the one it dollies along. A real camera is one object on
@@ -221,7 +229,7 @@ for index in 0..<timeline.frames {
     // The room first, under a WEAKER camera than the product gets, so moving closer separates
     // the two the way a lens does. Drawn and restored on its own so the product's transform is
     // not built on top of it.
-    if let colour = storyboard.background {
+    if let colour = shape.background {
         colour.setFill()
         canvas.fill()
     }
@@ -320,7 +328,7 @@ smooth.executableURL = URL(fileURLWithPath: "\(ProcessInfo.processInfo.environme
 // as a freeze, and the frame source may name spans it scripted the same way (timeline
 // "skip"); it judges everything else.
 smooth.arguments = [out] + (arguments.contains("--loop") ? ["--loop"] : [])
-    + timeline.camera.flatMap { ["--skip", String(format: "%.3f-%.3f", $0.at, $0.at + $0.seconds)] }
+    + moves.flatMap { ["--skip", String(format: "%.3f-%.3f", $0.at, $0.at + $0.seconds)] }
     + timeline.skip.flatMap { ["--skip", String(format: "%.3f-%.3f", $0.from, $0.to)] }
 try? smooth.run()
 smooth.waitUntilExit()

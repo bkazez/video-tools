@@ -180,6 +180,41 @@ def standing_in_a_room(tmp):
           done.stderr.strip() or "it was accepted")
 
 
+def the_phone_alone(tmp):
+    """The built-in `phone` cut: the bezel's own shape on black, no words, no camera."""
+    from PIL import Image
+    room = tmp / "phone"
+    frames = room / "frames"
+    frames.mkdir(parents=True, exist_ok=True)
+    board = storyboard(tmp, width=110, height=239, scale=2, chrome="iphone-16-pro-max",
+                       canvas={"width": 480, "height": 270}, background="#03070F")
+    places = json.loads(run([str(board), "--layout", "--variant", "phone"]).stdout)
+    canvas, glass = places["canvas"], places["screen"]
+    check("the phone cut is the bezel's own shape, standing up",
+          canvas["height"] > 1.8 * canvas["width"] and glass["height"] > 0.9 * canvas["height"]
+          and places["camera"] is False, json.dumps(places))
+    for index in range(FRAMES):
+        Image.new("RGB", (glass["width"], glass["height"]), (0, 200, 0)).save(frames / f"{index:05d}.png")
+    (frames / "timeline.json").write_text(json.dumps({
+        "fps": FPS, "frames": FRAMES, "width": 110, "height": 239, "scale": 2,
+        "canvas": {"width": canvas["width"] / 2, "height": canvas["height"] / 2},
+        "chrome": "iphone-16-pro-max", "camera": [],
+    }))
+    out = room / "film.mp4"
+    done = run([str(board), "--frames", str(frames), "--out", str(out),
+                "--width", str(canvas["width"]), "--variant", "phone"])
+    check("the phone cut becomes a film", done.returncode == 0 and out.exists(),
+          done.stderr.strip() or "no file")
+    if not out.exists():
+        return
+    first = Image.open(sorted((frames / "dressed").glob("*.png"))[0]).convert("RGB")
+    check("its corners are black, not the storyboard's background",
+          first.getpixel((1, 1)) == (0, 0, 0), str(first.getpixel((1, 1))))
+    # The card at 0 s would darken the glass; the phone cut has no words.
+    middle = first.getpixel((glass["x"] + glass["width"] // 2, glass["y"] + glass["height"] // 2))
+    check("and no card covers the glass", middle[1] > 180, str(middle))
+
+
 def refusing(tmp):
     """The film's own rule: what a viewer reads lands on the beat."""
     board = storyboard(tmp, events=[{"at": 0.0, "card": "on", "seconds": 0.4},
@@ -207,6 +242,7 @@ def main():
     print(f"the compositor, over {FRAMES} frames of nothing in particular\n")
     dressing(tmp)
     standing_in_a_room(tmp)
+    the_phone_alone(tmp)
     refusing(tmp)
 
     if failures:

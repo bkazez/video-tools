@@ -23,6 +23,7 @@ The recording and the test's log stay in --work, so a second cut (a title
 changed, the --variant vertical film) needs no simulator:
 
     ui-test-film STORYBOARD --recording WORK/recording.mp4 --out film-vertical.mp4 --variant vertical
+    ui-test-film STORYBOARD --recording WORK/recording.mp4 --out film.mp4 --variant phone   # for a web page
 
 Run the recording through simq: `simq run -- ui-test-film ...`.
 """
@@ -152,7 +153,8 @@ def main():
                         help="record on the iPhone plugged into this Mac (visual-test-tools' device-demo), "
                              "which draws its own frames whatever the Mac's load")
     parser.add_argument("--out", type=pathlib.Path, required=True)
-    parser.add_argument("--variant", help="the storyboard's named variant block, such as `vertical`")
+    parser.add_argument("--variant", help="the storyboard's named variant block, such as `vertical`, or `phone`: "
+                             "the phone alone on black, no titles, no camera, for a web page")
     parser.add_argument("--recording", type=pathlib.Path,
                         help="cut this recording (its test log beside it, .log) instead of making one")
     parser.add_argument("--status-time", help="HH:MM in the status bar, for data laid around now")
@@ -221,7 +223,7 @@ def main():
     canvas = {"width": places["canvas"]["width"] / scale, "height": places["canvas"]["height"] / scale}
     timeline = {"fps": fps, "frames": count, "width": log["width"], "height": log["height"],
                 "scale": scale, "canvas": canvas, "chrome": board.get(options.variant or "", {}).get(
-                    "chrome", board.get("chrome")), "camera": camera(board, log),
+                    "chrome", board.get("chrome")), "camera": camera(board, log) if places.get("camera", True) else [],
                 # The app's animation starting from a tap is scripted, as the camera is: a
                 # steep start right after a touch is the app's own curve, not a stall.
                 "skip": [[g["touch"], g["touch"] + TOUCH_SETTLE] for g in log.get("gestures", [])]}
@@ -229,7 +231,8 @@ def main():
 
     say("putting the film on it")
     run([COMPOSITOR, storyboard, "--frames", frames, "--out", out,
-         "--width", places["canvas"]["width"], "--poster-at", board.get("poster_at", 3)])
+         "--width", places["canvas"]["width"], "--poster-at", board.get("poster_at", 3)]
+        + (["--variant", options.variant] if options.variant else []))
     say(f"{out}; the recording is {recording}")
 
 

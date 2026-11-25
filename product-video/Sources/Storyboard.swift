@@ -12,12 +12,6 @@ struct Storyboard {
     let beat: Double?
     let subdivide: Double
     let events: [[String: Any]]
-    /// How much of the canvas's height a device's bezel stands in. Room for titles
-    /// above and below it by default; a film with no words can give the phone
-    /// nearly all of it.
-    let deviceFill: CGFloat
-    /// What the canvas is behind the product where there is no room footage.
-    let background: NSColor?
     private let board: [String: Any]
 
     init(path: String) {
@@ -33,14 +27,14 @@ struct Storyboard {
         // An empty list is a film with no words; no list at all is a typo.
         guard let listed = board["events"] as? [[String: Any]] else { fail("the storyboard has no events") }
         events = listed.sorted { (Storyboard.number($0["at"]) ?? 0) < (Storyboard.number($1["at"]) ?? 0) }
-        deviceFill = CGFloat(Storyboard.number(board["device_fill"]) ?? 0.72)
-        background = (board["background"] as? String).map { hex in
-            guard hex.hasPrefix("#"), hex.count == 7, let rgb = Int(hex.dropFirst(), radix: 16) else {
-                fail("background is \(hex); it wants #RRGGBB")
-            }
-            return NSColor(srgbRed: CGFloat(rgb >> 16 & 255) / 255, green: CGFloat(rgb >> 8 & 255) / 255,
-                           blue: CGFloat(rgb & 255) / 255, alpha: 1)
+    }
+
+    static func colour(_ hex: String) -> NSColor {
+        guard hex.hasPrefix("#"), hex.count == 7, let rgb = Int(hex.dropFirst(), radix: 16) else {
+            fail("background is \(hex); it wants #RRGGBB")
         }
+        return NSColor(srgbRed: CGFloat(rgb >> 16 & 255) / 255, green: CGFloat(rgb >> 8 & 255) / 255,
+                       blue: CGFloat(rgb & 255) / 255, alpha: 1)
     }
 
     static func number(_ raw: Any?) -> Double? { (raw as? NSNumber)?.doubleValue }
@@ -56,31 +50,63 @@ struct Storyboard {
         let canvas: CGSize?
         let scale: CGFloat
         let chrome: String?
+        /// How much of the canvas's height a device's bezel stands in. Room for
+        /// titles above and below it by default; a film with no words gives the
+        /// phone nearly all of it.
+        let deviceFill: CGFloat
+        /// What the canvas is behind the product where there is no room footage.
+        let background: NSColor?
+        /// Whether the cards, steps and keycaps are drawn.
+        let words: Bool
+        /// Whether the storyboard's camera moves are played.
+        let camera: Bool
     }
+
+    /// The phone alone, for a web page that stands it beside its own words: the
+    /// bezel on black, the canvas the bezel's own shape, no titles and no camera.
+    /// Every storyboard with a device has it, so every app's page film is cut the
+    /// same way; a storyboard may still name its own `phone` block.
+    static let phone: [String: Any] = ["canvas": "device", "device_fill": 0.98, "background": "#000000",
+                                       "words": false, "camera": false]
 
     /// A variant is the same film redrawn in another shape rather than cropped
     /// out of the wide one: `vertical` for a phone, or any block the storyboard
     /// names (an App Store preview is `"preview": {"chrome": false, "canvas":
     /// false}`, the product filling the picture). Say which one you are
     /// rendering. A variant's `canvas: false` means no room around the product,
-    /// even when the wide film has one.
+    /// even when the wide film has one; `canvas: "device"` is the bezel's own
+    /// shape with `device_fill` of margin, and `words` and `camera` false leave
+    /// out the titles and the camera moves (the built-in `phone`, above).
     func geometry(variant: String?) -> Geometry {
-        let block = variant.flatMap { board[$0] as? [String: Any] } ?? [:]
+        let block = variant.flatMap { board[$0] as? [String: Any] ?? ($0 == "phone" ? Storyboard.phone : nil) } ?? [:]
         func value(_ key: String) -> Double? {
             Storyboard.number(block[key]) ?? Storyboard.number(board[key])
         }
+        let size = CGSize(width: value("width") ?? 0, height: value("height") ?? 0)
+        let chrome = (block["chrome"] ?? board["chrome"]).flatMap { Storyboard.chrome($0) }
+        let fill = CGFloat(value("device_fill") ?? 0.72)
         func canvasSize() -> CGSize? {
             let raw = block.keys.contains("canvas") ? block["canvas"] : board["canvas"]
+            if raw as? String == "device" {
+                guard let chrome, chrome != "macos" else { fail("canvas \"device\" needs a device chrome") }
+                let device = Film.device(chrome)
+                let points = size.height / device.screen.height / fill
+                return CGSize(width: (device.size.width * points).rounded(), height: (device.size.height * points).rounded())
+            }
             guard let raw = raw as? [String: Any],
                   let wide = Storyboard.number(raw["width"]),
                   let tall = Storyboard.number(raw["height"]) else { return nil }
             return CGSize(width: wide, height: tall)
         }
         return Geometry(
-            size: CGSize(width: value("width") ?? 0, height: value("height") ?? 0),
+            size: size,
             canvas: canvasSize(),
             scale: CGFloat(value("scale") ?? 1),
-            chrome: (block["chrome"] ?? board["chrome"]).flatMap { Storyboard.chrome($0) })
+            chrome: chrome,
+            deviceFill: fill,
+            background: ((block["background"] ?? board["background"]) as? String).map(Storyboard.colour),
+            words: block["words"] as? Bool ?? true,
+            camera: block["camera"] as? Bool ?? true)
     }
 
     /// `chrome` was a bool while there was only one thing it could mean. It now
