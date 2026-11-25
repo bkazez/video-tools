@@ -41,32 +41,32 @@ compiled; a heading 0.3 s late reads as a stumble that nobody can name.
 Where the film has real music under it, the beat should be **the music's own
 pulse**, not an arbitrary number. Measure it rather than guess it.
 
-## A card, then numbered steps, and nothing else on screen
+## The picture explains it; the first two seconds stop the scroll
 
-The shape that survives contact with a stranger:
+No titles by default. A viewer looks at a phone doing something; words on top
+of it read as an ad, and an ad is the thing people have learned not to look at.
+Numbered steps, a card naming the problem, a promise in big type: all of them
+are promotion, and they push the product out of the frame they sit on.
 
-1. **A card that names the problem**, on a dimmed frame. Not the product, not the
-   company: the thing the viewer already puts up with. A second line can land
-   under the first while it is still up — the answer to it, not a replacement.
-2. **Numbered steps, each announced by a big centred title** over the running
-   picture. Not captions at the foot — a caption is read *after* the thing it
-   describes, and a viewer who has to work out what they just saw has stopped
-   watching. A title is read before, and the action underneath keeps going.
-3. Three to five steps. A step needs about 4 s after its title is read.
+1. **Open on the most arresting moment the product has**, in the first two
+   seconds, before anything is explained: the plane sweeping across the map,
+   the trip appearing, the sound starting. Not a home screen, not typing, not
+   a setup. A viewer decides in those two seconds whether to keep watching.
+2. **Let each action explain itself.** Choose and order the moments so a
+   stranger can follow them with the sound off: the tap, then what it found,
+   held long enough to see. If a moment cannot be understood without words,
+   first try a better moment.
+3. **A title only where the picture truly cannot carry it**, one or two in a
+   film at most: short, plain, a fact about what is on screen ("50 minutes
+   late from Dallas"), never a slogan or a pitch. A platform that plays muted
+   in a feed does not change this; the arresting opening is what carries it.
 
-Every title is a verb phrase about what the viewer would do, not a feature name.
-"Hear any take from where you point" beats "Audition".
+**The words are the owner's, and they are used exactly.** When Ben writes a
+title, it goes in the film character for character. A title that reads better
+is not license to reword one. Add no line he did not write.
 
-**The words are the owner's, and they are used exactly.** When Ben writes the
-titles, they go in the film character for character, numbering included. A title
-that reads better is not licence to reword one, and the number belongs *in* the
-string rather than drawn beside it as a mark of your own — that quietly turns
-"1. Arc automatically aligns your takes" into two different things in two places.
-Add no sixth line he did not write.
-
-**Titles land, they do not fade.** Opaque in about 0.07 s, a tenth over size on
-arrival, settling over 0.16 s. A linear fade reads as hesitation, and hesitation
-is the opposite of what a film cut to a beat is doing.
+**A title lands, it does not fade.** Opaque in about 0.07 s, a tenth over size
+on arrival, settling over 0.16 s. A linear fade reads as hesitation.
 
 ## The demo has to be a real one
 
@@ -103,8 +103,8 @@ Everything below is about honesty, and each one has cost somebody a re-shoot:
 
 Write the story before a single event: one person, what they want, what is in
 their way, and how the product gets them there, as one sentence per beat. A
-tour of features is not a story, and a camera cannot rescue one. The titles
-say the story; the camera has to tell it too, the way Roger Deakins shoots:
+tour of features is not a story, and a camera cannot rescue one. The picture
+tells the story, and the camera tells it the way Roger Deakins shoots:
 the audience should feel every move and notice none.
 
 - **Every move is motivated by the story.** It goes where a person in that
@@ -180,11 +180,13 @@ the frame they are in.
 
 ## On the page
 
-The page has one job. No headline over the film — a line of type above it only
-pushes it down; keep the heading in the document for a screen reader and search
-and do not draw it. Full bleed, and no taller than the viewport minus the room
-the call to action needs, so the film and the way to sign up are on screen
-together.
+An app's page opens on its phone: the film cut to the phone alone, in its
+frame on black with no words, standing on the right, and the app's name or
+slogan with the download button on the left (impulsearc.com/legato). Every
+pipeline that films an app writes this phone-only cut beside its reels. Only
+a camera app (Wavelength) runs its film full bleed, because the film has to
+show the scene the camera sees; then no headline goes over it, and it is no
+taller than the viewport minus the room the download button needs.
 
 Browsers will not autoplay sound. So: `autoplay muted loop playsinline`, a
 poster, and one control that unmutes **where the film already is**. A control
