@@ -39,7 +39,7 @@ storyboard. Read those before writing a second one.
 
 ## Events
 
-A film with no words has `"events": []`. Each event has `at` (seconds of video) and one action. Everything a viewer reads
+A film of the product alone has no words: product-video refuses a `card` or `step` in a storyboard with no `scene`. Each event has `at` (seconds of video) and one action. Everything a viewer reads
 or hears must land on the beat; the mechanics between beats are free.
 
 | Action | Meaning |

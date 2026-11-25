@@ -41,6 +41,7 @@ guard arguments.count > 1, !arguments[1].hasPrefix("-") else {
 }
 let storyboard = Storyboard(path: arguments[1])
 storyboard.checkBeat()
+storyboard.checkWords()
 
 /// The shape this run cuts: the storyboard's own, or the variant named.
 let shape = storyboard.geometry(variant: text("--variant") ?? (arguments.contains("--vertical") ? "vertical" : nil))

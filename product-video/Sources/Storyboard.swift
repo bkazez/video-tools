@@ -160,6 +160,18 @@ struct Storyboard {
         }
     }
 
+    /// A film of a product alone carries no words: a title over an app reads as an
+    /// advertisement, and each action explains itself. Words go only over a film
+    /// that cuts to the places the product is used (`scene`), as a camera app's
+    /// does, where the viewer needs to be told where they are.
+    func checkWords() {
+        let worded = events.first { $0["card"] != nil || $0["step"] != nil }
+        guard let worded, !events.contains(where: { $0["scene"] != nil }) else { return }
+        let words = (worded["card"] ?? worded["step"]).map { "\($0)" } ?? "?"
+        fail("\"\(words)\" is a title over a film of the product alone -- such a film has no words; "
+             + "cards and steps go only in a storyboard that cuts to places (`scene`)")
+    }
+
     /// The words, and the keys, in the order they appear. Everything else in the
     /// storyboard is the frame source's business.
     struct Titles {

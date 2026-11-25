@@ -53,6 +53,7 @@ def storyboard(tmp, **changes):
     board = {
         "seconds": FRAMES / FPS, "fps": FPS, "beat": 1.0,
         "events": [
+            {"at": 0.0, "scene": {"place": "a room"}},
             {"at": 0.0, "card": "One line.", "seconds": 0.6,
              "then": {"text": "And another.", "at": 0.3}},
             {"at": 1.0, "step": "1. A step", "seconds": 0.6},
@@ -282,6 +283,13 @@ def refusing(tmp):
 
     done = run([str(storyboard(tmp)), "--check"])
     check("and a storyboard on the beat passes", done.returncode == 0, done.stderr.strip())
+
+    board = storyboard(tmp, events=[{"at": 0.0, "step": "Tap to follow", "seconds": 0.5},
+                                    {"at": 1.0, "do": "follow"}])
+    done = run([str(board), "--check"])
+    check("a title over the product alone fails the build",
+          done.returncode != 0 and "no words" in done.stderr,
+          done.stderr.strip() or "it was accepted")
 
 
 def main():

@@ -56,10 +56,11 @@ are promotion, and they push the product out of the frame they sit on.
    stranger can follow them with the sound off: the tap, then what it found,
    held long enough to see. If a moment cannot be understood without words,
    first try a better moment.
-3. **A title only where the picture truly cannot carry it**, one or two in a
-   film at most: short, plain, a fact about what is on screen ("50 minutes
-   late from Dallas"), never a slogan or a pitch. A platform that plays muted
-   in a feed does not change this; the arresting opening is what carries it.
+3. **No title over the product alone, ever.** product-video refuses a `card`
+   or `step` in a storyboard with no `scene`. The one film with words is a
+   camera app's (Wavelength), which cuts between the places it is used and has
+   to say where the viewer is. A platform that plays muted in a feed does not
+   change this; the arresting opening is what carries it.
 
 **The words are the owner's, and they are used exactly.** When Ben writes a
 title, it goes in the film character for character. A title that reads better
