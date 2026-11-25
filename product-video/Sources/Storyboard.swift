@@ -62,23 +62,32 @@ struct Storyboard {
         let camera: Bool
     }
 
-    /// The phone alone, for a web page that stands it beside its own words: the
-    /// bezel on black, the canvas the bezel's own shape, no titles and no camera.
-    /// Every storyboard with a device has it, so every app's page film is cut the
-    /// same way; a storyboard may still name its own `phone` block.
-    static let phone: [String: Any] = ["canvas": "device", "device_fill": 0.98, "background": "#000000",
-                                       "words": false, "camera": false]
+    /// The cuts every film of a device has, by name, so every app's films come
+    /// out the same: `wide` 16:9 and `feed` 4:5 for a feed, `vertical` 9:16 for
+    /// a reel, `phone` the bezel alone on black for a web page that stands it
+    /// beside its own words (no titles, no camera), and `preview` the screen
+    /// alone for the App Store. A storyboard's block of the same name overrides
+    /// any of their keys. Points, at the storyboard's `scale`.
+    static let deviceCuts: [String: [String: Any]] = [
+        "wide": ["canvas": ["width": 960, "height": 540]],
+        "feed": ["canvas": ["width": 540, "height": 675]],
+        "vertical": ["canvas": ["width": 540, "height": 960]],
+        "phone": ["canvas": "device", "device_fill": 0.98, "background": "#000000", "words": false, "camera": false],
+        "preview": ["chrome": false, "canvas": false, "words": false, "camera": false],
+    ]
 
     /// A variant is the same film redrawn in another shape rather than cropped
-    /// out of the wide one: `vertical` for a phone, or any block the storyboard
-    /// names (an App Store preview is `"preview": {"chrome": false, "canvas":
-    /// false}`, the product filling the picture). Say which one you are
-    /// rendering. A variant's `canvas: false` means no room around the product,
+    /// out of the wide one: a built-in cut above, or any block the storyboard
+    /// names. A variant's `canvas: false` means no room around the product,
     /// even when the wide film has one; `canvas: "device"` is the bezel's own
     /// shape with `device_fill` of margin, and `words` and `camera` false leave
-    /// out the titles and the camera moves (the built-in `phone`, above).
+    /// out the titles and the camera moves.
     func geometry(variant: String?) -> Geometry {
-        let block = variant.flatMap { board[$0] as? [String: Any] ?? ($0 == "phone" ? Storyboard.phone : nil) } ?? [:]
+        let device = (board["chrome"]).flatMap { Storyboard.chrome($0) }.map { $0 != "macos" } ?? false
+        let block = variant.map { name in
+            (device ? Storyboard.deviceCuts[name] ?? [:] : [:])
+                .merging(board[name] as? [String: Any] ?? [:]) { _, own in own }
+        } ?? [:]
         func value(_ key: String) -> Double? {
             Storyboard.number(block[key]) ?? Storyboard.number(board[key])
         }

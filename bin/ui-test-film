@@ -26,6 +26,11 @@ changed, the --variant vertical film) needs no simulator:
 
     ui-test-film STORYBOARD --recording WORK/recording.mp4 --out film-vertical.mp4 --variant vertical
     ui-test-film STORYBOARD --recording WORK/recording.mp4 --out film.mp4 --variant phone   # for a web page
+    ui-test-film STORYBOARD --recording WORK/recording.mp4 --all DIR --marcom flighttrack  # every cut, filed
+
+Every app has the same cuts (CUTS below, product-video's built-in variants), named
+by the Marcom asset type each one is, so `--all DIR --marcom PRODUCT` puts the
+whole set where its other marketing is.
 
 A film is of the build on sale: the project must be at an ios-<version>-<build>
 tag, as the checkout released-tree makes is, unless --unreleased.
@@ -45,6 +50,16 @@ HERE = pathlib.Path(__file__).resolve().parent
 COMPOSITOR = HERE / "product-video"
 SIM_FILM = pathlib.Path.home() / "Projects/visual-test-tools/bin/sim-film"
 DEVICE_DEMO = pathlib.Path.home() / "Projects/visual-test-tools/bin/device-demo"
+PR = pathlib.Path.home() / "Projects/manager/bin/pr"
+
+# Every cut a device's film has (product-video's built-in variants), by the Marcom asset type each one is.
+CUTS = {
+    "wide": "social.video_16x9",
+    "feed": "social.video_4x5",
+    "vertical": "social.reel",
+    "phone": "site.film",
+    "preview": "app_store.app_preview.iphone",
+}
 
 
 def say(message):
@@ -164,55 +179,9 @@ def segments(log, seconds, slow=1.0):
     return out
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("storyboard", type=pathlib.Path)
-    parser.add_argument("--project")
-    parser.add_argument("--scheme")
-    parser.add_argument("--test")
-    parser.add_argument("--device", default="iPhone-16-Pro-Max",
-                        help="a simulator device type whose screen is the bezel's hole")
-    parser.add_argument("--phone", action="store_true",
-                        help="record on the iPhone plugged into this Mac (visual-test-tools' device-demo), "
-                             "which draws its own frames whatever the Mac's load")
-    parser.add_argument("--out", type=pathlib.Path, required=True)
-    parser.add_argument("--variant", help="the storyboard's named variant block, such as `vertical`, or `phone`: "
-                             "the phone alone on black, no titles, no camera, for a web page")
-    parser.add_argument("--recording", type=pathlib.Path,
-                        help="cut this recording (its test log beside it, .log) instead of making one")
-    parser.add_argument("--status-time", help="HH:MM in the status bar, for data laid around now")
-    parser.add_argument("--privacy", help='permissions settled before the test, so no prompt is filmed: '
-                                          '"grant location com.example.App; revoke contacts com.example.App"')
-    parser.add_argument("--work", type=pathlib.Path, help="where the recording and frames go")
-    parser.add_argument("--unreleased", action="store_true",
-                        help="record a project that is not the build on sale (released-tree makes that one)")
-    options = parser.parse_args()
-
-    storyboard = options.storyboard.resolve()
-    board = json.loads(storyboard.read_text())
-    run([COMPOSITOR, storyboard, "--check"])
-    on_the_beat(board)
-    out = options.out.resolve()
-    work = (options.work or pathlib.Path("/tmp") / f"ui-test-film-{out.stem}").resolve()
-    work.mkdir(parents=True, exist_ok=True)
-
-    recording = options.recording.resolve() if options.recording else work / "recording.mp4"
-    if not options.recording:
-        if not (options.project and options.scheme and options.test):
-            fail("--project, --scheme and --test make the recording; or cut one with --recording")
-        if not options.unreleased:
-            released(pathlib.Path(options.project).resolve().parent)
-        record(storyboard, options, recording)
-    log_path = recording.with_suffix(".log")
-    if not log_path.exists():
-        fail(f"no {log_path.name}: the test did not play the storyboard (Filming's playFilm)")
-    log = json.loads(log_path.read_text())
-    if "recordingStarted" in log:
-        # A phone's recording is Xcode's: the film's zero is placed by the clock.
-        log["zero"] = log["zeroDate"] - log["recordingStarted"]
-    report(log)
-
-    layout_argv = [COMPOSITOR, storyboard, "--layout"] + (["--variant", options.variant] if options.variant else [])
+def cut(storyboard, board, log, recording, variant, out, work):
+    """One cut of the film (a variant, or the storyboard's own shape when None) from the recording, at `out`."""
+    layout_argv = [COMPOSITOR, storyboard, "--layout"] + (["--variant", variant] if variant else [])
     places = json.loads(run(layout_argv, capture_output=True).stdout)
     screen, scale = places["screen"], places["scale"]
     fps = board.get("fps", 30)
@@ -262,8 +231,7 @@ def main():
 
     canvas = {"width": places["canvas"]["width"] / scale, "height": places["canvas"]["height"] / scale}
     timeline = {"fps": fps, "frames": count, "width": log["width"], "height": log["height"],
-                "scale": scale, "canvas": canvas, "chrome": board.get(options.variant or "", {}).get(
-                    "chrome", board.get("chrome")), "camera": camera(board, log) if places.get("camera", True) else [],
+                "scale": scale, "canvas": canvas, "chrome": places["chrome"], "camera": camera(board, log) if places.get("camera", True) else [],
                 # The app's animation starting from a tap is scripted, as the camera is: a
                 # steep start right after a touch is the app's own curve, not a stall.
                 "skip": [[g["touch"], g["touch"] + TOUCH_SETTLE] for g in log.get("gestures", [])]}
@@ -272,8 +240,94 @@ def main():
     say("putting the film on it")
     run([COMPOSITOR, storyboard, "--frames", frames, "--out", out,
          "--width", places["canvas"]["width"], "--poster-at", board.get("poster_at", 3)]
-        + (["--variant", options.variant] if options.variant else []))
+        + (["--variant", variant] if variant else []))
     say(f"{out}; the recording is {recording}")
+
+
+def store_preview(path):
+    """The App Store's app preview for the 6.9-inch iPhones: 886x1920 at 30 fps, H.264 High 4.0, with a
+    silent stereo track, which Apple refuses a preview without."""
+    made = path.with_name(path.stem + "-store.mp4")
+    run(["ffmpeg", "-v", "error", "-y", "-i", path, "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
+         "-map", "0:v", "-map", "1:a", "-vf", "fps=30,scale=886:1920:flags=lanczos,setsar=1",
+         "-c:v", "libx264", "-preset", "slow", "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-profile:v", "high",
+         "-level", "4.0", "-b:v", "11M", "-maxrate", "12M", "-bufsize", "24M", "-c:a", "aac", "-b:a", "256k", "-shortest", made])
+    made.replace(path)
+
+
+def file(product, asset, path):
+    """Put one cut in Marcom as the product's asset of that type, replacing what it had, for Ben to approve."""
+    say(f"filing {path.name} as {product}/{asset} in Marcom")
+    run([PR, "attach", f"{product}/{asset}", path, "--replace"])
+    run([PR, "put", "assets", f"{product}/{asset}", "status=ben_review"])
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("storyboard", type=pathlib.Path)
+    parser.add_argument("--project")
+    parser.add_argument("--scheme")
+    parser.add_argument("--test")
+    parser.add_argument("--device", default="iPhone-16-Pro-Max",
+                        help="a simulator device type whose screen is the bezel's hole")
+    parser.add_argument("--phone", action="store_true",
+                        help="record on the iPhone plugged into this Mac (visual-test-tools' device-demo), "
+                             "which draws its own frames whatever the Mac's load")
+    parser.add_argument("--out", type=pathlib.Path, help="the one cut --variant names")
+    parser.add_argument("--all", type=pathlib.Path, metavar="DIR",
+                        help="every cut into DIR, each named by its Marcom asset type: " + ", ".join(
+                            f"{asset}.mp4 ({variant})" for variant, asset in CUTS.items()))
+    parser.add_argument("--marcom", metavar="PRODUCT", help="with --all, file each cut in Marcom as PRODUCT's asset")
+    parser.add_argument("--variant", help="the storyboard's named variant block, such as `vertical`, or `phone`: "
+                             "the phone alone on black, no titles, no camera, for a web page")
+    parser.add_argument("--recording", type=pathlib.Path,
+                        help="cut this recording (its test log beside it, .log) instead of making one")
+    parser.add_argument("--status-time", help="HH:MM in the status bar, for data laid around now")
+    parser.add_argument("--privacy", help='permissions settled before the test, so no prompt is filmed: '
+                                          '"grant location com.example.App; revoke contacts com.example.App"')
+    parser.add_argument("--work", type=pathlib.Path, help="where the recording and frames go")
+    parser.add_argument("--unreleased", action="store_true",
+                        help="record a project that is not the build on sale (released-tree makes that one)")
+    options = parser.parse_args()
+
+    storyboard = options.storyboard.resolve()
+    board = json.loads(storyboard.read_text())
+    run([COMPOSITOR, storyboard, "--check"])
+    on_the_beat(board)
+    if bool(options.out) == bool(options.all):
+        fail("give --out for one cut or --all DIR for every cut")
+    out = options.out.resolve() if options.out else None
+    work = (options.work or pathlib.Path("/tmp") / f"ui-test-film-{(out or options.all.resolve()).stem}").resolve()
+    work.mkdir(parents=True, exist_ok=True)
+
+    recording = options.recording.resolve() if options.recording else work / "recording.mp4"
+    if not options.recording:
+        if not (options.project and options.scheme and options.test):
+            fail("--project, --scheme and --test make the recording; or cut one with --recording")
+        if not options.unreleased:
+            released(pathlib.Path(options.project).resolve().parent)
+        record(storyboard, options, recording)
+    log_path = recording.with_suffix(".log")
+    if not log_path.exists():
+        fail(f"no {log_path.name}: the test did not play the storyboard (Filming's playFilm)")
+    log = json.loads(log_path.read_text())
+    if "recordingStarted" in log:
+        # A phone's recording is Xcode's: the film's zero is placed by the clock.
+        log["zero"] = log["zeroDate"] - log["recordingStarted"]
+    report(log)
+
+    if options.all:
+        options.all.mkdir(parents=True, exist_ok=True)
+        made = {}
+        for variant, asset in CUTS.items():
+            made[asset] = options.all.resolve() / f"{asset}.mp4"
+            cut(storyboard, board, log, recording, variant, made[asset], work)
+        store_preview(made["app_store.app_preview.iphone"])
+        if options.marcom:
+            for asset, path in made.items():
+                file(options.marcom, asset, path)
+    else:
+        cut(storyboard, board, log, recording, options.variant, out, work)
 
 
 if __name__ == "__main__":

@@ -92,6 +92,7 @@ if arguments.contains("--layout") {
                    "height": Int((places.canvas.height * shape.scale).rounded())],
         "screen": pixels(places.product),
         "camera": shape.camera,
+        "chrome": shape.chrome ?? NSNull(),
     ]
     let data = try! JSONSerialization.data(withJSONObject: said, options: [.sortedKeys])
     print(String(data: data, encoding: .utf8)!)

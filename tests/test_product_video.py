@@ -215,6 +215,23 @@ def the_phone_alone(tmp):
     check("and no card covers the glass", middle[1] > 180, str(middle))
 
 
+def every_cut(tmp):
+    """Every device film has the same built-in cuts, each the size its Marcom asset type wants."""
+    board = storyboard(tmp, width=440, height=956, scale=2, chrome="iphone-16-pro-max",
+                       canvas={"width": 300, "height": 300}, feed={"device_fill": 0.8})
+    wants = {"wide": (1920, 1080), "feed": (1080, 1350), "vertical": (1080, 1920), "preview": (880, 1912)}
+    for variant, size in wants.items():
+        places = json.loads(run([str(board), "--layout", "--variant", variant]).stdout)
+        check(f"the {variant} cut is {size[0]}x{size[1]}",
+              (places["canvas"]["width"], places["canvas"]["height"]) == size, json.dumps(places))
+    preview = json.loads(run([str(board), "--layout", "--variant", "preview"]).stdout)
+    check("the preview is the screen alone, no bezel, no camera",
+          preview["chrome"] is None and preview["camera"] is False, json.dumps(preview))
+    tighter = json.loads(run([str(board), "--layout", "--variant", "feed"]).stdout)["screen"]["height"]
+    wide = json.loads(run([str(board), "--layout", "--variant", "vertical"]).stdout)["screen"]["height"]
+    check("a storyboard's own block overrides a built-in cut's key", tighter < wide, f"{tighter} vs {wide}")
+
+
 def turned_sideways(tmp):
     """A product wider than tall stands in the bezel turned a quarter left: an app that runs sideways."""
     from PIL import Image
@@ -282,6 +299,7 @@ def main():
     dressing(tmp)
     standing_in_a_room(tmp)
     the_phone_alone(tmp)
+    every_cut(tmp)
     turned_sideways(tmp)
     refusing(tmp)
 
