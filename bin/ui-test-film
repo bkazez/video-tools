@@ -331,4 +331,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except subprocess.CalledProcessError as failed:
+        # product-video's exit 3, jerky, is what film-until-smooth records again on.
+        sys.exit(failed.returncode)
