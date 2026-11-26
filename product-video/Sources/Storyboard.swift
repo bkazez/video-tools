@@ -60,6 +60,10 @@ struct Storyboard {
         /// titles above and below it by default; a film with no words gives the
         /// phone nearly all of it.
         let deviceFill: CGFloat
+        /// Where the bezel's top stands, as a share of the canvas's height down
+        /// from its top; nil centres it. A page that opens on the film puts its
+        /// headline over the room above the phone.
+        let deviceTop: CGFloat?
         /// What the canvas is behind the product where there is no room footage.
         let background: NSColor?
         /// Whether the cards, steps and keycaps are drawn.
@@ -119,6 +123,7 @@ struct Storyboard {
             scale: CGFloat(value("scale") ?? 1),
             chrome: chrome,
             deviceFill: fill,
+            deviceTop: value("device_top").map { CGFloat($0) },
             background: ((block["background"] ?? board["background"]) as? String).map(Storyboard.colour),
             words: block["words"] as? Bool ?? true,
             camera: block["camera"] as? Bool ?? true)

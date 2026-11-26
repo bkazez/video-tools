@@ -147,12 +147,13 @@ enum Film {
     /// Where the bezel stands in the canvas, and where its glass is -- the rect
     /// the product gets drawn into. Centred, because a phone off to one side
     /// reads as a layout and a phone in the middle reads as the subject.
-    static func stand(_ device: Device, in canvas: NSRect, fill: CGFloat) -> (bezel: NSRect, screen: NSRect) {
+    static func stand(_ device: Device, in canvas: NSRect, fill: CGFloat, top: CGFloat? = nil) -> (bezel: NSRect, screen: NSRect) {
         let scale = min(canvas.height * fill / device.size.height, canvas.width * fill / device.size.width)
+        let height = device.size.height * scale
         let bezel = NSRect(x: canvas.midX - device.size.width * scale / 2,
-                           y: canvas.midY - device.size.height * scale / 2,
+                           y: top.map { canvas.maxY - canvas.height * $0 - height } ?? canvas.midY - height / 2,
                            width: device.size.width * scale,
-                           height: device.size.height * scale)
+                           height: height)
         // The table gives the hole measured from the top of the bezel; a canvas
         // counts up from the bottom.
         let screen = NSRect(
