@@ -26,7 +26,12 @@ over all the blocks flips between them from frame to frame.
   hold     a frame that repeats the one before, with the picture changing on most
            frames on both sides of it, and alike just before and just after: a slow picture drawn at half the frame rate,
            or a map that stops drawing for a few frames, which is too small a step
-           for the phase correlation above to judge
+           for the phase correlation above to judge. Not where the picture turns
+           back the way it came, as a list bouncing off its end does: at the turn
+           it stands still for a frame because that is the motion, not a stall.
+           Nor where it creeps a pixel or two a frame and does not catch up after
+           the held frame: a frame that came late would have to, so the picture
+           only stayed on one pixel
 
 A picture that is not moving, or barely, is not judged: a still is not a stall.
 Barely is under half an analysis pixel a frame (about a pixel of a 1080p film):
@@ -120,6 +125,49 @@ def measure(path, loop):
     return steps, same, times, fps
 
 
+TURN = 1.0               # analysis pixels a frame the picture must move each side of a hold to be seen turning back
+CREEP = 2.0              # analysis pixels a frame, at most, that a picture creeps at to stay on one pixel for a frame
+
+
+def shift(a, b, reach=120):
+    """How far the picture in profile B lies along from profile A (a frame's mean of each row,
+    or of each column), signed, in analysis pixels; 0 when nothing changed. Only the span that
+    changed is matched, so a bar held still over the motion does not pull the answer to 0."""
+    changed = np.flatnonzero(np.abs(a - b) > 0.5)
+    if len(changed) < 8:
+        return 0.0
+    lo, hi = changed[0], changed[-1] + 1
+    best, found = -1.0, 0
+    for s in range(-reach, reach + 1):
+        start, end = max(lo, -s), min(hi, len(b) - s)
+        if end - start < 16:
+            continue
+        x, y = a[start:end], b[start + s:end + s]
+        x, y = x - x.mean(), y - y.mean()
+        score = float(np.dot(x, y) / (np.linalg.norm(x) * np.linalg.norm(y) + 1e-9))
+        if score > best:
+            best, found = score, s
+    return float(found)
+
+
+def moving_on(profiles, i):
+    """Whether the hold after stored frame I is the motion itself rather than a late frame,
+    along either axis: the picture turns back across it (moving one way into it and the
+    other way out), or it creeps a pixel or two a frame and does not catch up after it,
+    which a frame that came late would have to."""
+    if i < 1 or i + 2 >= len(profiles):
+        return False
+    for axis in (0, 1):
+        into = shift(profiles[i - 1][axis], profiles[i][axis])
+        across = shift(profiles[i][axis], profiles[i + 1][axis])
+        out = shift(profiles[i + 1][axis], profiles[i + 2][axis])
+        if abs(into) >= TURN and abs(out) >= TURN and into * out < 0:
+            return True
+        if TURN <= abs(into) <= CREEP and into * (across + out) >= 0 and abs(across + out) <= abs(into) + 0.5:
+            return True
+    return False
+
+
 def holds(path, fps):
     """Each run of held frames inside changing pictures: (index of the step after which the
     picture held, run length in frames).
@@ -130,11 +178,12 @@ def holds(path, fps):
     width, height, times = motion.probe(path)
     seen, typical = shown(times)
     stamps = times[seen]
-    change, before = [], None
+    change, before, profiles = [], None, []
     for frame, keep in zip(motion.frames(path, width, height), seen):
         if not keep:
             continue
         frame = frame.astype(np.float32)
+        profiles.append((frame.mean(axis=1), frame.mean(axis=0)))
         if before is not None:
             change.append(float(np.abs(frame - before).mean()))
         before = frame
@@ -161,7 +210,8 @@ def holds(path, fps):
     edges = np.flatnonzero(np.diff(np.r_[0, held.astype(int), 0]))
     return [(int(origin[start]), int(end - start)) for start, end in zip(edges[::2], edges[1::2])
             if end - start <= longest and busy(changing[max(0, start - near):start])
-            and busy(changing[end:end + near]) and alike(start, end - start)]
+            and busy(changing[end:end + near]) and alike(start, end - start)
+            and not moving_on(profiles, origin[start])]
 
 
 def beside_rest(moves, reach, fps):

@@ -184,6 +184,25 @@ def main():
         found = holds_in(tmp / "stalled.mp4", stalled, 30)
         check("one held mid-spring for two frames is a hold, at its time",
               len(found) == 1 and found[0]["frames"] == 2 and abs(found[0]["at"] - 21 / 30) < 0.02, str(found))
+        # A list flung past its end on the phone, 30 frames a second: it slows, stands for a frame where
+        # it turns, and settles back (maestro-ios AppReviewDemoTests, Settings, 81.9 s: steps
+        # 47, 8, 6, 0, -3, -7, -5). Standing still at the turn is the motion, not a stall; the
+        # same frame held with the list going on the same way is.
+        out = [0.0, 40, 80, 120, 160, 200, 247, 255, 261]
+        bounced = [0.0] * 15 + out + [261, 258, 251, 246, 244, 238, 237, 234, 232, 230, 229] + [229.0] * 15
+        check("a list standing still where it turns back is no hold",
+              holds_in(tmp / "bounce.mp4", bounced, 30) == [], "")
+        onward = [0.0] * 15 + out + [261, 264, 271, 276, 278, 284, 285, 288, 290, 292, 293] + [293.0] * 15
+        check("the same frame held with the list going on is a hold",
+              len(holds_in(tmp / "onward.mp4", onward, 30)) == 1, "")
+        # The end of a fling, a pixel a frame (Settings, 80.5 s: 1, 2, 1, 0, 1, 1): one frame stays on
+        # its pixel and nothing catches up after it, so no frame was late. The same crawl that
+        # catches up two pixels after the held frame lost one.
+        crawl = [0.0] * 15 + out + [262, 264, 265, 267, 268, 268, 269, 270, 271, 272, 273] + [273.0] * 15
+        check("a crawl staying on its pixel for a frame is no hold", holds_in(tmp / "crawl.mp4", crawl, 30) == [], "")
+        caught = [0.0] * 15 + out + [262, 264, 265, 267, 268, 268, 271, 272, 273, 274, 275] + [275.0] * 15
+        check("a crawl that catches up after the held frame is a hold",
+              len(holds_in(tmp / "caught.mp4", caught, 30)) == 1, "")
         # product-video's own camera moves are passed with --camera; a camera eased from rest
         # starts with steps too small to tell from a held frame. An app's eased animation
         # (--skip) is a curve, but a stall in it is still a stall.
