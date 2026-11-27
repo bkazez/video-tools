@@ -72,5 +72,14 @@ with tempfile.TemporaryDirectory() as tmp:
     check("the shared scheme that tests the target", app.scheme_for(made, "AppUITests") == "Tests")
     check("else the project's name", app.scheme_for(made, "Elsewhere") == "App")
 
+print("a repo's bin/demo-account reaches the test runner")
+with tempfile.TemporaryDirectory() as folder:
+    root = pathlib.Path(folder)
+    check("no demo-account, nothing passed", app.demo_account(root) == {})
+    (root / "bin").mkdir()
+    (root / "bin" / "demo-account").write_text(': "${DEMO_EMAIL:=a@example.com}"\nexport DEMO_EMAIL\n')
+    got = app.demo_account(root)
+    check("its variable, prefixed for xcodebuild", got == {"TEST_RUNNER_DEMO_EMAIL": "a@example.com"}, str(got))
+
 print("\nall passed" if not failures else f"\n{len(failures)} failed")
 sys.exit(1 if failures else 0)

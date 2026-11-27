@@ -28,12 +28,16 @@ there may be the Mac's; on the phone it is the app's.
 
 It finds the project, the scheme and the UI-test target from the test's file, so
 every app is checked the same way with no per-app script. It makes no model call.
+A demo that signs in reads its account from the environment: a repo with
+`bin/demo-account` (a shell file, sourced) has every variable it sets passed to
+the test, as `bin/demo-account` in maestro-ios sets MAESTRO_EMAIL.
 
 Every TestFlight build runs it, after the upload: agent-ops' mac.yml, step
 "Animations on the iPhone". A stutter turns that build red.
 """
 
 import argparse
+import shlex
 import json
 import os
 import pathlib
@@ -115,6 +119,18 @@ def scheme_for(project, target):
     return project.stem
 
 
+def demo_account(root):
+    """What the repo's bin/demo-account sets, for the test runner: xcodebuild
+    forwards only TEST_RUNNER_-prefixed variables, stripping the prefix."""
+    script = root / "bin/demo-account"
+    if not script.exists():
+        return {}
+    dump = lambda source: dict(line.split("=", 1) for line in output(
+        ["bash", "-c", f"cd {shlex.quote(str(root))}; {source}env -0"]).split("\0") if "=" in line)
+    before, after = dump(""), dump(". bin/demo-account; ")
+    return {f"TEST_RUNNER_{k}": v for k, v in after.items() if before.get(k) != v and k not in ("_", "SHLVL", "PWD")}
+
+
 def record(root, work):
     test = test_file(root)
     try:
@@ -125,7 +141,7 @@ def record(root, work):
     scheme = scheme_for(project, target)
     recording = work / "recording.mp4"
     print(f"==> {project.relative_to(root)}: scheme {scheme}, {target}/{TEST_CLASS}, on the iPhone", flush=True)
-    env = {**os.environ, "PATH": f"{pathlib.Path.home() / 'bin'}:{os.environ['PATH']}"}
+    env = {**os.environ, "PATH": f"{pathlib.Path.home() / 'bin'}:{os.environ['PATH']}", **demo_account(root)}
     log = work / "record.log"
     with log.open("w") as out:
         made = subprocess.run([str(a) for a in [DEVICE_DEMO, project, scheme, f"{target}/{TEST_CLASS}", recording]],
